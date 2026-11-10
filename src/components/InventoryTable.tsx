@@ -112,27 +112,46 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
       </div>
 
       {/* Main Table */}
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.84rem' }}>
+      <div style={{
+        width: '100%',
+        maxWidth: '100%',
+        overflowX: 'auto',
+        WebkitOverflowScrolling: 'touch',
+        borderRadius: '8px',
+        border: '1px solid var(--border-color)',
+        boxShadow: 'inset 0 0 8px rgba(0, 0, 0, 0.2)'
+      }}>
+        <table style={{ width: '100%', minWidth: '1080px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.84rem' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-              <th style={{ padding: '14px 12px', fontWeight: 600 }}>Categoria</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600, minWidth: '180px' }}>Recurso Origem & Produto GCP</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600, minWidth: '260px' }}>SKU / Especificações & Arquitetura</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600, textAlign: 'center' }}>Qtd</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600 }}>Região</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right' }}>Sem Commit (PAYG)</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600, color: '#38bdf8', textAlign: 'right' }}>Commit 1 Ano</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600, color: '#34d399', textAlign: 'right' }}>Commit 3 Anos</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600, textAlign: 'center' }}>Economia (3Y)</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600, minWidth: '160px' }}>Notas Técnicas</th>
-              <th style={{ padding: '14px 12px', fontWeight: 600, textAlign: 'center' }}>Ações</th>
+              <th style={{ padding: '12px 10px', fontWeight: 600 }}>Categoria</th>
+              <th style={{ padding: '12px 10px', fontWeight: 600, minWidth: '170px' }}>Recurso Origem & Produto GCP</th>
+              <th style={{ padding: '12px 10px', fontWeight: 600, minWidth: '240px' }}>SKU / Especificações & Arquitetura</th>
+              <th style={{ padding: '12px 10px', fontWeight: 600, textAlign: 'center', width: '60px' }}>Qtd</th>
+              <th style={{ padding: '12px 10px', fontWeight: 600, width: '150px' }}>Região</th>
+              <th style={{ padding: '12px 10px', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right', width: '115px' }}>Sem Commit (PAYG)</th>
+              <th style={{ padding: '12px 10px', fontWeight: 600, color: '#38bdf8', textAlign: 'right', width: '115px' }}>Commit 1 Ano</th>
+              <th style={{ padding: '12px 10px', fontWeight: 600, color: '#34d399', textAlign: 'right', width: '135px' }}>Commit 3 Anos</th>
+              <th style={{
+                padding: '12px 10px',
+                fontWeight: 600,
+                textAlign: 'center',
+                position: 'sticky',
+                right: 0,
+                background: '#1e293b',
+                zIndex: 3,
+                boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.3)',
+                width: '140px',
+                minWidth: '140px'
+              }}>
+                Ações
+              </th>
             </tr>
           </thead>
           <tbody>
             {filteredItems.length === 0 ? (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
+                <td colSpan={9} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
                   Nenhum recurso encontrado no inventário. Faça upload de uma planilha ou adicione um item manual.
                 </td>
               </tr>
@@ -177,7 +196,7 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                     </td>
 
                     {/* Original Resource & GCP Product */}
-                    <td style={{ padding: '12px 10px' }}>
+                    <td style={{ padding: '12px 10px', minWidth: '170px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{originalResourceName}</span>
                         <select
@@ -204,6 +223,11 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                       <div style={{ fontSize: '0.75rem', color: '#60a5fa', marginTop: '2px' }}>
                         ➔ {gcpProductSuggested || 'Google Cloud'}
                       </div>
+                      {technicalNotes && technicalNotes !== 'Sem observações' && (
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', fontStyle: 'italic' }}>
+                          ℹ {technicalNotes}
+                        </div>
+                      )}
                     </td>
 
                     {/* SKU & Specs */}
@@ -404,16 +428,16 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                             border: '1px solid rgba(255, 255, 255, 0.15)',
                             borderRadius: '4px',
                             color: 'var(--text-primary)',
-                            padding: '2px 6px',
-                            fontSize: '0.75rem',
+                            padding: '3px 6px',
+                            fontSize: '0.74rem',
+                            maxWidth: '145px',
                             cursor: 'pointer',
                           }}
                         >
-                          {Object.entries(GCP_REGION_LABELS).map(([key, label]) => (
-                            <option key={key} value={key} style={{ background: '#1e293b', color: '#fff' }}>
-                              {label}
-                            </option>
-                          ))}
+                          <option value="southamerica-east1" style={{ background: '#1e293b', color: '#fff' }}>São Paulo (BR)</option>
+                          <option value="us-central1" style={{ background: '#1e293b', color: '#fff' }}>Iowa (EUA)</option>
+                          <option value="us-east1" style={{ background: '#1e293b', color: '#fff' }}>N. Virginia (EUA)</option>
+                          <option value="europe-west1" style={{ background: '#1e293b', color: '#fff' }}>Bélgica (EU)</option>
                         </select>
                       </div>
                     </td>
@@ -435,45 +459,37 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                     {/* Scenario 3: 3Y CUD */}
                     <td style={{ padding: '12px 10px', textAlign: 'right', fontWeight: 600, color: '#34d399' }}>
                       {formatCost(cud3yrCostMonthly)}
-                      <div style={{ fontSize: '0.68rem', color: paygCostMonthly > cud3yrCostMonthly ? '#34d399' : 'var(--text-muted)' }}>
-                        {paygCostMonthly > cud3yrCostMonthly ? `-${((1 - cud3yrCostMonthly / paygCostMonthly) * 100).toFixed(0)}%` : 'sem desc.'}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px', marginTop: '2px' }}>
+                        {savingsPct > 0 ? (
+                          <span style={{
+                            padding: '1px 6px',
+                            borderRadius: '8px',
+                            fontSize: '0.68rem',
+                            fontWeight: 700,
+                            backgroundColor: 'rgba(52, 211, 153, 0.15)',
+                            color: '#34d399',
+                            border: '1px solid rgba(52, 211, 153, 0.3)'
+                          }}>
+                            -{savingsPct.toFixed(0)}%
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>sem desc.</span>
+                        )}
                       </div>
                     </td>
 
-                    {/* Savings Badge */}
-                    <td style={{ padding: '12px 10px', textAlign: 'center' }}>
-                      {savingsPct > 0 ? (
-                        <span style={{
-                          padding: '3px 8px',
-                          borderRadius: '12px',
-                          fontSize: '0.72rem',
-                          fontWeight: 700,
-                          backgroundColor: 'rgba(52, 211, 153, 0.15)',
-                          color: '#34d399',
-                          border: '1px solid rgba(52, 211, 153, 0.3)'
-                        }}>
-                          -{savingsPct.toFixed(0)}%
-                        </span>
-                      ) : (
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>-</span>
-                      )}
-                    </td>
-
-                    {/* Technical Notes */}
-                    <td style={{ padding: '12px 10px', maxWidth: '200px' }}>
-                      <div style={{
-                        fontSize: '0.72rem',
-                        color: 'var(--text-secondary)',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }} title={technicalNotes}>
-                        {technicalNotes || 'Sem observações'}
-                      </div>
-                    </td>
-
-                    {/* Actions */}
-                    <td style={{ padding: '12px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    {/* Actions (Sticky Right) */}
+                    <td style={{
+                      padding: '12px 10px',
+                      textAlign: 'center',
+                      whiteSpace: 'nowrap',
+                      position: 'sticky',
+                      right: 0,
+                      background: 'rgba(23, 32, 51, 0.95)',
+                      backdropFilter: 'blur(8px)',
+                      zIndex: 2,
+                      boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.3)',
+                    }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                         <button
                           onClick={() => onEditItem(item)}
