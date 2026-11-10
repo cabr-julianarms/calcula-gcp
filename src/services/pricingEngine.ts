@@ -3,18 +3,23 @@ import {
   getMachineSpec,
   sustainedUseDiscount,
   osLicenseHourly,
-  CUD_RATES,
+  computeCudRates,
+  SQL_CUD_RATES,
   SPOT_DISCOUNT,
-  DISK_GB_MONTHLY_USD,
-  STORAGE_GB_MONTHLY_USD,
-  CLOUD_SQL,
+  diskGBMonthly,
+  storageGBMonthly,
+  sqlRates,
+  SQL_SERVER_STANDARD_PER_VCPU_HOURLY_USD,
   parseSqlTier,
   NETWORK,
+  networkRegionFactor,
   GKE_CLUSTER_MANAGEMENT_MONTHLY_USD,
-  regionalRates,
+  familyRates,
   FAMILY_BY_ID,
   MachineFamily,
 } from '../data/gcpPricingCatalog';
+import { getRegion } from '../data/regions';
+import { DiskType } from '../types/gcp';
 
 const usd = (n: number, d = 2) => `$${n.toFixed(d)}`;
 
@@ -27,7 +32,7 @@ export function inferCategory(item: InventoryItem): GCPResourceCategory {
 }
 
 export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
-  const rates = regionalRates(item.region);
+  const region = getRegion(item.region);
   const qty = Math.max(1, item.quantity || 1);
   const hours = Math.min(730, Math.max(0, item.usageHoursPerMonth ?? 730));
   const category = inferCategory(item);
@@ -42,8 +47,9 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
   const vcpus = spec ? spec.vCPUs : item.vCPUs || 2;
   const billableVcpus = spec ? spec.billableVCPUs : vcpus;
   const ramGB = spec ? spec.ramGB : item.ramGB || 8;
-  const vcpuRate = family.vcpuHourlyUSD * rates.compute;
-  const ramRate = family.ramGBHourlyUSD * rates.compute;
+  const famRates = familyRates(region.id, family.id);
+  const vcpuRate = famRates.vcpu;
+  const ramRate = famRates.ram;
   const os = item.operatingSystem || 'linux';
   const osRate = isComputeLike ? osLicenseHourly(os, vcpus, !!spec?.sharedCore) : 0;
 
@@ -59,8 +65,9 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
       spec
         ? `Machine type ${spec.name} — família ${family.label} (${vcpus} vCPU${spec.sharedCore ? ' compartilhada' : ''}, ${ramGB} GB)`
         : `Shape customizado (sem machine type reconhecido) — tarifa ${family.label}: ${vcpus} vCPU, ${ramGB} GB`,
-      `Tarifa regional ${rates.region.id}: vCPU ${usd(vcpuRate, 6)}/h · RAM ${usd(ramRate, 6)}/GB·h (índice ${rates.compute.toFixed(3)}× us-central1)`,
+      `Tarifa ${family.label} em ${region.id}: vCPU ${usd(vcpuRate, 6)}/h · RAM ${usd(ramRate, 6)}/GB·h`,
     );
+    if (!famRates.available) skuRefs.push(`Atenção: a família ${family.label} não é oferecida em ${region.id}; usada a tarifa de us-central1.`);
     if (osRate > 0) skuRefs.push(`Licença ${os.toUpperCase()}: ${usd(osRate, 4)}/h por instância`);
 
     steps.push(
@@ -82,7 +89,7 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
   let baseDiskMonthlyCost = 0;
   let bootDiskRate = 0;
   let additionalDiskRate = 0;
-  const diskRate = (t: keyof typeof DISK_GB_MONTHLY_USD) => (DISK_GB_MONTHLY_USD[t] ?? DISK_GB_MONTHLY_USD['pd-balanced']) * rates.disk;
+  const diskRate = (t: DiskType) => diskGBMonthly(region.id, t);
 
   if (isComputeLike) {
     if (item.bootDiskGB && item.bootDiskGB > 0) {
@@ -115,7 +122,7 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
   if (item.serviceType === 'storage') {
     const cls = item.storageClass || 'standard';
     const gb = item.storageGB || 0;
-    const rate = STORAGE_GB_MONTHLY_USD[cls] * rates.storage;
+    const rate = storageGBMonthly(region.id, cls);
     baseStorageMonthlyCost = gb * rate * qty;
     skuRefs.push(`Cloud Storage ${cls} (regional): ${usd(rate, 4)}/GB·mês`);
     steps.push(`Cloud Storage ${cls}: ${gb} GB × ${usd(rate, 4)} × ${qty} = ${usd(baseStorageMonthlyCost)}`);
@@ -126,21 +133,23 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
   if (item.serviceType === 'sql') {
     const tierSpec = parseSqlTier(item.dbTier) || { tier: item.dbTier || 'custom', vCPUs: item.vCPUs || 2, ramGB: item.ramGB || 8 };
     const ha = item.highAvailability ? 2 : 1;
-    const instanceHourly = tierSpec.sharedHourlyUSD !== undefined
-      ? tierSpec.sharedHourlyUSD * rates.compute
-      : (tierSpec.vCPUs * CLOUD_SQL.vcpuHourlyUSD + tierSpec.ramGB * CLOUD_SQL.ramGBHourlyUSD) * rates.compute;
-    const licenseHourly = item.dbEngine === 'SQLSERVER' ? Math.max(4, tierSpec.vCPUs) * CLOUD_SQL.sqlServerStandardPerVCPUHourlyUSD : 0;
+    const sql = sqlRates(region.id);
+    const instanceHourly = sql.shared[tierSpec.tier] !== undefined
+      ? sql.shared[tierSpec.tier]
+      : tierSpec.vCPUs * sql.vcpuHourlyUSD + tierSpec.ramGB * sql.ramGBHourlyUSD;
+    const licenseHourly = item.dbEngine === 'SQLSERVER' ? Math.max(4, tierSpec.vCPUs) * SQL_SERVER_STANDARD_PER_VCPU_HOURLY_USD : 0;
     const instanceCost = instanceHourly * hours * ha * qty;
     const licenseCost = licenseHourly * hours * qty; // licença não dobra com HA (standby não licenciado)
     const storageGB = item.dbStorageGB || 100;
-    const storageRate = CLOUD_SQL.ssdGBMonthlyUSD * rates.disk;
+    const storageRate = sql.ssdGBMonthlyUSD;
     const storageCost = storageGB * storageRate * ha * qty;
     baseDatabaseMonthlyCost = instanceCost + licenseCost + storageCost;
 
     skuRefs.push(
       `Cloud SQL ${item.dbEngine || 'MYSQL'} ${tierSpec.tier} (${tierSpec.vCPUs} vCPU, ${tierSpec.ramGB} GB) — ${item.highAvailability ? 'HA regional (primária + standby)' : 'zonal'}`,
-      `Armazenamento SSD Cloud SQL: ${usd(storageRate, 4)}/GB·mês`,
+      `Cloud SQL em ${region.id}: vCPU ${usd(sql.vcpuHourlyUSD, 5)}/h · RAM ${usd(sql.ramGBHourlyUSD, 5)}/GB·h · SSD ${usd(storageRate, 4)}/GB·mês`,
     );
+    if (!sql.available) skuRefs.push(`Atenção: sem tabela de Cloud SQL para ${region.id}; usada a de us-central1.`);
     if (licenseHourly) skuRefs.push(`Licença SQL Server Standard: ${usd(licenseHourly, 3)}/h`);
     steps.push(
       `Cloud SQL ${tierSpec.tier}${item.highAvailability ? ' (HA ×2)' : ''}`,
@@ -154,7 +163,7 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
   let baseNetworkMonthlyCost = 0;
   if (item.serviceType === 'network') {
     const nt = item.networkType || 'egress';
-    const idx = rates.compute;
+    const idx = networkRegionFactor(region.id);
     if (nt === 'ip') {
       const n = item.ipCount || 1;
       const rate = item.unitCostUSD ?? NETWORK.externalIpMonthlyUSD;
@@ -186,7 +195,7 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
       steps.push(`Rede (valor informado): ${usd(item.unitCostUSD)} × ${qty} = ${usd(baseNetworkMonthlyCost)}`);
     } else {
       const gb = item.egressGB ?? 100;
-      const rate = item.unitCostUSD ?? rates.egressGBUSD;
+      const rate = item.unitCostUSD ?? region.egressUSD;
       baseNetworkMonthlyCost = gb * rate * qty;
       skuRefs.push(`Egress internet (Premium Tier, estimativa): ${usd(rate, 3)}/GB`);
       steps.push(`Egress: ${gb} GB × ${usd(rate, 3)} × ${qty} = ${usd(baseNetworkMonthlyCost)}`);
@@ -199,7 +208,7 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
   const isCudEligible = isComputeLike || item.serviceType === 'sql';
   const sudAmount = baseComputeMonthlyCost * sudRate;
   const computedPayg = grossMonthlyCost - sudAmount;
-  const cudRates = item.serviceType === 'sql' ? CUD_RATES.sql : CUD_RATES.compute;
+  const cudRates = item.serviceType === 'sql' ? SQL_CUD_RATES : computeCudRates(family.id);
   const cudBase = isComputeLike ? baseComputeMonthlyCost : baseDatabaseMonthlyCost;
   // CUD substitui o SUD (não acumulam); só vale a pena se o desconto do CUD superar o SUD
   const computedCud1 = isCudEligible ? Math.min(computedPayg, grossMonthlyCost - cudBase * cudRates.cud_1yr) : computedPayg;

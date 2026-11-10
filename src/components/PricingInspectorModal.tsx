@@ -4,6 +4,7 @@ import { CalculatedCostItem } from '../types/gcp';
 import { formatCurrency } from '../utils/formatters';
 import { regionLabel } from '../data/regions';
 import { Modal } from './ui';
+import { PRICING_DATE } from '../data/gcpPricingCatalog';
 
 interface PricingInspectorModalProps {
   calculatedItem: CalculatedCostItem;
@@ -56,7 +57,7 @@ export const PricingInspectorModal: React.FC<PricingInspectorModalProps> = ({ ca
       </div>
 
       <p className="faint" style={{ fontSize: '0.76rem' }}>
-        Tarifas de lista on-demand (us-central1) multiplicadas pelo índice regional. Use estes valores como estimativa e confirme na{' '}
+        Tarifas de lista on-demand da região, extraídas das páginas oficiais de preço em {PRICING_DATE}. Sem impostos nem descontos negociados; confirme na{' '}
         <a href="https://cloud.google.com/products/calculator" target="_blank" rel="noreferrer">calculadora oficial do Google Cloud</a>.
       </p>
     </Modal>

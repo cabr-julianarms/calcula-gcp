@@ -1,13 +1,13 @@
+import pricing from './pricing.json';
+
 /**
- * Catálogo de regiões públicas do Google Cloud.
+ * Catálogo de regiões do Google Cloud.
  *
- * priceIndex   → fator de preço de Compute/Disco/Cloud SQL relativo a us-central1 (aprox. tabela pública on-demand).
- * storageIndex → fator de preço de Cloud Storage regional relativo a us-central1.
- * egressUSD    → tarifa média estimada de saída para internet (Premium Tier, primeiro TB) a partir da região.
- * lowCO2       → região marcada como "Low CO2" na página oficial de regiões do Google Cloud.
+ * A lista de regiões vem de src/data/pricing.json (gerado por scripts/update-pricing.py a partir das
+ * páginas oficiais de preço). Aqui ficam só os metadados de exibição:
+ * lowCO2            → região marcada como "Low CO2" na página oficial de regiões do Google Cloud.
  * lowCO2Alternative → região "Low CO2" geograficamente próxima, usada pelo pilar de Sustentabilidade.
- *
- * Os índices são aproximações para estimativa — valide valores finais na calculadora oficial.
+ * egressUSD         → tarifa média estimada de saída para internet (Premium Tier, primeiro TB).
  */
 export type Continent = 'Américas' | 'Europa' | 'Ásia-Pacífico' | 'Oriente Médio' | 'África';
 
@@ -16,87 +16,81 @@ export interface RegionInfo {
   city: string;
   country: string;
   continent: Continent;
-  priceIndex: number;
-  storageIndex: number;
   egressUSD: number;
   lowCO2: boolean;
   lowCO2Alternative?: string;
 }
 
-const r = (
-  id: string,
-  city: string,
-  country: string,
-  continent: Continent,
-  priceIndex: number,
-  storageIndex: number,
-  lowCO2: boolean,
-  lowCO2Alternative?: string,
-): RegionInfo => ({
-  id,
-  city,
-  country,
-  continent,
-  priceIndex,
-  storageIndex,
-  egressUSD: continent === 'Américas' && !id.startsWith('southamerica') ? 0.12 : continent === 'Europa' ? 0.12 : 0.14,
-  lowCO2,
-  lowCO2Alternative,
-});
+type Meta = [city: string, country: string, lowCO2: boolean, lowCO2Alternative?: string];
 
-export const GCP_REGIONS: RegionInfo[] = [
-  // Américas
-  r('us-central1', 'Iowa', 'EUA', 'Américas', 1.0, 1.0, true),
-  r('us-east1', 'Carolina do Sul', 'EUA', 'Américas', 1.0, 1.0, false, 'us-central1'),
-  r('us-east4', 'N. Virginia', 'EUA', 'Américas', 1.126, 1.15, false, 'northamerica-northeast1'),
-  r('us-east5', 'Columbus', 'EUA', 'Américas', 1.0, 1.0, false, 'us-central1'),
-  r('us-south1', 'Dallas', 'EUA', 'Américas', 1.18, 1.15, true),
-  r('us-west1', 'Oregon', 'EUA', 'Américas', 1.0, 1.0, true),
-  r('us-west2', 'Los Angeles', 'EUA', 'Américas', 1.2, 1.15, false, 'us-west1'),
-  r('us-west3', 'Salt Lake City', 'EUA', 'Américas', 1.2, 1.15, false, 'us-west1'),
-  r('us-west4', 'Las Vegas', 'EUA', 'Américas', 1.126, 1.15, false, 'us-west1'),
-  r('northamerica-northeast1', 'Montreal', 'Canadá', 'Américas', 1.1, 1.15, true),
-  r('northamerica-northeast2', 'Toronto', 'Canadá', 'Américas', 1.1, 1.15, true),
-  r('northamerica-south1', 'Querétaro', 'México', 'Américas', 1.2, 1.15, false, 'us-south1'),
-  r('southamerica-east1', 'São Paulo', 'Brasil', 'Américas', 1.54, 1.75, true),
-  r('southamerica-west1', 'Santiago', 'Chile', 'Américas', 1.42, 1.5, true),
+const META: Record<string, Meta> = {
+  'us-central1': ['Iowa', 'EUA', true],
+  'us-east1': ['Carolina do Sul', 'EUA', false, 'us-central1'],
+  'us-east4': ['N. Virginia', 'EUA', false, 'northamerica-northeast1'],
+  'us-east5': ['Columbus', 'EUA', false, 'us-central1'],
+  'us-south1': ['Dallas', 'EUA', true],
+  'us-west1': ['Oregon', 'EUA', true],
+  'us-west2': ['Los Angeles', 'EUA', false, 'us-west1'],
+  'us-west3': ['Salt Lake City', 'EUA', false, 'us-west1'],
+  'us-west4': ['Las Vegas', 'EUA', false, 'us-west1'],
+  'us-west8': ['Phoenix', 'EUA', false, 'us-west1'],
+  'northamerica-northeast1': ['Montreal', 'Canadá', true],
+  'northamerica-northeast2': ['Toronto', 'Canadá', true],
+  'northamerica-south1': ['Querétaro', 'México', false, 'us-south1'],
+  'southamerica-east1': ['São Paulo', 'Brasil', true],
+  'southamerica-west1': ['Santiago', 'Chile', true],
+  'europe-west1': ['St. Ghislain', 'Bélgica', true],
+  'europe-west2': ['Londres', 'Reino Unido', false, 'europe-west1'],
+  'europe-west3': ['Frankfurt', 'Alemanha', false, 'europe-west6'],
+  'europe-west4': ['Eemshaven', 'Holanda', false, 'europe-west1'],
+  'europe-west6': ['Zurique', 'Suíça', true],
+  'europe-west8': ['Milão', 'Itália', false, 'europe-west6'],
+  'europe-west9': ['Paris', 'França', true],
+  'europe-west10': ['Berlim', 'Alemanha', false, 'europe-west6'],
+  'europe-west12': ['Turim', 'Itália', false, 'europe-west9'],
+  'europe-central2': ['Varsóvia', 'Polônia', false, 'europe-north1'],
+  'europe-north1': ['Hamina', 'Finlândia', true],
+  'europe-north2': ['Estocolmo', 'Suécia', false, 'europe-north1'],
+  'europe-southwest1': ['Madri', 'Espanha', true],
+  'me-central1': ['Doha', 'Catar', false],
+  'me-central2': ['Dammam', 'Arábia Saudita', false],
+  'me-west1': ['Tel Aviv', 'Israel', false],
+  'africa-south1': ['Joanesburgo', 'África do Sul', false],
+  'asia-east1': ['Changhua', 'Taiwan', false],
+  'asia-east2': ['Hong Kong', 'China', false],
+  'asia-northeast1': ['Tóquio', 'Japão', false],
+  'asia-northeast2': ['Osaka', 'Japão', false],
+  'asia-northeast3': ['Seul', 'Coreia do Sul', false],
+  'asia-south1': ['Mumbai', 'Índia', false],
+  'asia-south2': ['Délhi', 'Índia', false],
+  'asia-southeast1': ['Jurong West', 'Singapura', false],
+  'asia-southeast2': ['Jacarta', 'Indonésia', false],
+  'asia-southeast3': ['Bangkok', 'Tailândia', false],
+  'australia-southeast1': ['Sydney', 'Austrália', false],
+  'australia-southeast2': ['Melbourne', 'Austrália', false],
+};
 
-  // Europa
-  r('europe-west1', 'St. Ghislain', 'Bélgica', 'Europa', 1.1, 1.0, true),
-  r('europe-west2', 'Londres', 'Reino Unido', 'Europa', 1.287, 1.15, false, 'europe-west1'),
-  r('europe-west3', 'Frankfurt', 'Alemanha', 'Europa', 1.287, 1.15, false, 'europe-west6'),
-  r('europe-west4', 'Eemshaven', 'Holanda', 'Europa', 1.1, 1.0, false, 'europe-west1'),
-  r('europe-west6', 'Zurique', 'Suíça', 'Europa', 1.397, 1.25, true),
-  r('europe-west8', 'Milão', 'Itália', 'Europa', 1.19, 1.15, false, 'europe-west6'),
-  r('europe-west9', 'Paris', 'França', 'Europa', 1.19, 1.15, true),
-  r('europe-west10', 'Berlim', 'Alemanha', 'Europa', 1.287, 1.15, false, 'europe-west6'),
-  r('europe-west12', 'Turim', 'Itália', 'Europa', 1.19, 1.15, false, 'europe-west9'),
-  r('europe-central2', 'Varsóvia', 'Polônia', 'Europa', 1.287, 1.15, false, 'europe-north1'),
-  r('europe-north1', 'Hamina', 'Finlândia', 'Europa', 1.1, 1.0, true),
-  r('europe-north2', 'Estocolmo', 'Suécia', 'Europa', 1.1, 1.15, false, 'europe-north1'),
-  r('europe-southwest1', 'Madri', 'Espanha', 'Europa', 1.19, 1.15, true),
+function continentOf(id: string): Continent {
+  if (/^(us|northamerica|southamerica)-/.test(id)) return 'Américas';
+  if (id.startsWith('europe-')) return 'Europa';
+  if (id.startsWith('me-')) return 'Oriente Médio';
+  if (id.startsWith('africa-')) return 'África';
+  return 'Ásia-Pacífico';
+}
 
-  // Oriente Médio
-  r('me-central1', 'Doha', 'Catar', 'Oriente Médio', 1.2, 1.15, false),
-  r('me-central2', 'Dammam', 'Arábia Saudita', 'Oriente Médio', 1.4, 1.25, false),
-  r('me-west1', 'Tel Aviv', 'Israel', 'Oriente Médio', 1.14, 1.15, false),
+type PricingRegion = { name: string; compute: Record<string, unknown>; sql: unknown; disk: unknown; storage: unknown };
+const PRICED = pricing.regions as Record<string, PricingRegion>;
 
-  // África
-  r('africa-south1', 'Joanesburgo', 'África do Sul', 'África', 1.3, 1.25, false),
-
-  // Ásia-Pacífico
-  r('asia-east1', 'Changhua', 'Taiwan', 'Ásia-Pacífico', 1.16, 1.0, false),
-  r('asia-east2', 'Hong Kong', 'China', 'Ásia-Pacífico', 1.4, 1.25, false),
-  r('asia-northeast1', 'Tóquio', 'Japão', 'Ásia-Pacífico', 1.287, 1.15, false),
-  r('asia-northeast2', 'Osaka', 'Japão', 'Ásia-Pacífico', 1.287, 1.15, false),
-  r('asia-northeast3', 'Seul', 'Coreia do Sul', 'Ásia-Pacífico', 1.287, 1.15, false),
-  r('asia-south1', 'Mumbai', 'Índia', 'Ásia-Pacífico', 1.2, 1.15, false),
-  r('asia-south2', 'Délhi', 'Índia', 'Ásia-Pacífico', 1.2, 1.15, false),
-  r('asia-southeast1', 'Jurong West', 'Singapura', 'Ásia-Pacífico', 1.23, 1.0, false),
-  r('asia-southeast2', 'Jacarta', 'Indonésia', 'Ásia-Pacífico', 1.32, 1.15, false),
-  r('australia-southeast1', 'Sydney', 'Austrália', 'Ásia-Pacífico', 1.42, 1.15, false),
-  r('australia-southeast2', 'Melbourne', 'Austrália', 'Ásia-Pacífico', 1.42, 1.15, false),
-];
+/** Só entram regiões com tabela completa (várias famílias de VM + discos) */
+export const GCP_REGIONS: RegionInfo[] = Object.entries(PRICED)
+  .filter(([, p]) => p.disk && Object.keys(p.compute).length >= 4)
+  .map(([id, p]) => {
+    const [city, country, lowCO2, lowCO2Alternative] = META[id] || [p.name, '', false];
+    const continent = continentOf(id);
+    const egressUSD = continent === 'Europa' || (continent === 'Américas' && !id.startsWith('southamerica')) ? 0.12 : 0.14;
+    return { id, city, country, continent, egressUSD, lowCO2, lowCO2Alternative };
+  })
+  .sort((a, b) => a.id.localeCompare(b.id));
 
 export const REGION_BY_ID: Record<string, RegionInfo> = Object.fromEntries(GCP_REGIONS.map((reg) => [reg.id, reg]));
 
@@ -119,7 +113,7 @@ export function regionLabel(id: string): string {
 
 export function regionShortLabel(id: string): string {
   const reg = REGION_BY_ID[id];
-  return reg ? `${reg.city}, ${reg.country}` : id;
+  return reg ? (reg.country ? `${reg.city}, ${reg.country}` : reg.city) : id;
 }
 
 /** Equivalência de regiões AWS / Azure → GCP mais próxima, usada na importação de inventários. */

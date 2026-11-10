@@ -23,7 +23,7 @@ export const RegionSelect: React.FC<RegionSelectProps> = ({ value, onChange, cla
       <optgroup key={continent} label={continent}>
         {GCP_REGIONS.filter((r) => r.continent === continent).map((r) => (
           <option key={r.id} value={r.id}>
-            {compact ? `${r.city} · ${r.id}` : `${r.city}, ${r.country} — ${r.id}`}
+            {compact ? `${r.city} · ${r.id}` : `${r.city}${r.country ? `, ${r.country}` : ''} — ${r.id}`}
             {r.lowCO2 ? ' 🌱' : ''}
           </option>
         ))}

@@ -12,6 +12,7 @@ import { calculateItemCost, calculateSummary } from './services/pricingEngine';
 import { generateWellArchitectedRecommendations, totalPotentialSavings } from './services/wellArchitectedEngine';
 import { parseCSVInventory, generateSampleCSV } from './services/inventoryParser';
 import { DEFAULT_REGION, isKnownRegion, normalizeRegion } from './data/regions';
+import { PRICING_DATE } from './data/gcpPricingCatalog';
 
 const STORAGE_KEYS = {
   INVENTORY: 'gcp_calc_inventory_v1',
@@ -199,7 +200,7 @@ export const App: React.FC = () => {
       <CostDashboard calculatedItems={calculatedItems} summary={summary} currency={currency} exchangeRateBRL={rate} />
 
       <footer className="footer">
-        Estimativas com preços de lista públicos do Google Cloud (on-demand, sem impostos nem descontos negociados), ajustados por índice regional.
+        Preços de lista oficiais do Google Cloud por região, atualizados em {new Date(PRICING_DATE + 'T12:00:00').toLocaleDateString('pt-BR')} (on-demand, sem impostos nem descontos negociados).
         <br />
         Valide valores finais na <a href="https://cloud.google.com/products/calculator" target="_blank" rel="noreferrer">calculadora oficial</a>. 🌱 indica regiões com selo Low CO₂.
       </footer>

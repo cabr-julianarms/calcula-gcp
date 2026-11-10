@@ -1,6 +1,6 @@
 import { CalculatedCostItem, InventoryItem, WafPillar, WellArchitectedRecommendation } from '../types/gcp';
 import { calculateItemCost } from './pricingEngine';
-import { getMachineSpec, sqlTierFor, SNAPSHOT_GB_MONTHLY_USD, CUD_RATES } from '../data/gcpPricingCatalog';
+import { getMachineSpec, sqlTierFor, snapshotGBMonthly, SQL_CUD_RATES, familiesInRegion } from '../data/gcpPricingCatalog';
 import { getRegion, regionLabel } from '../data/regions';
 
 /**
@@ -76,15 +76,19 @@ function impactFromDelta(delta: number, fallback: 'HIGH' | 'MEDIUM' | 'LOW' = 'M
 
 const isNonProd = (env: string) => env === 'dev' || env === 'qa' || env === 'staging';
 
-/** Mapeia um machine type legado/compartilhado para o equivalente moderno de mesmo porte */
-function modernEquivalent(machineType: string): string | null {
+/** Mapeia um N1 para o equivalente moderno de mesmo porte disponível na região (N2D → E2) */
+function modernEquivalent(machineType: string, region: string): string | null {
   const spec = getMachineSpec(machineType);
   if (!spec || spec.family.id !== 'n1') return null;
   const m = machineType.match(/^n1-(standard|highmem|highcpu)-(\d+)$/);
   if (!m) return null;
-  const size = parseInt(m[2], 10);
-  const target = size === 1 ? 'e2-standard-2' : `n2d-${m[1]}-${size}`;
-  return getMachineSpec(target) ? target : `e2-${m[1]}-${size}`;
+  const size = Math.max(2, parseInt(m[2], 10));
+  const available = familiesInRegion(region);
+  for (const fam of ['n2d', 'e2']) {
+    const target = `${fam}-${m[1]}-${size}`;
+    if (available.includes(fam) && getMachineSpec(target)) return target;
+  }
+  return null;
 }
 
 export function generateWellArchitectedRecommendations(calculated: CalculatedCostItem[]): WellArchitectedRecommendation[] {
@@ -144,7 +148,7 @@ export function generateWellArchitectedRecommendations(calculated: CalculatedCos
 
     // ---------- CUSTO + DESEMPENHO: modernizar N1 ----------
     if (isVM && item.machineType) {
-      const target = modernEquivalent(item.machineType);
+      const target = modernEquivalent(item.machineType, item.region);
       if (target) {
         const tSpec = getMachineSpec(target)!;
         const patch = { machineType: target, vCPUs: tSpec.vCPUs, ramGB: tSpec.ramGB };
@@ -332,7 +336,7 @@ export function generateWellArchitectedRecommendations(calculated: CalculatedCos
         id: 'cost-cud-baseline',
         pillar: 'cost',
         title: `Comprometer apenas o baseline de produção (${steadyProd.length} recurso${steadyProd.length > 1 ? 's' : ''})`,
-        description: `Recursos de produção 24×7 são candidatos a CUD: 1 ano dá ~${CUD_RATES.compute.cud_1yr * 100}% em Compute e ~${CUD_RATES.sql.cud_1yr * 100}% em Cloud SQL. Comece por 1 ano e só vá para 3 anos com a arquitetura estável.${nonProd > 0 ? ` Não comprometa os ${nonProd} recurso(s) não produtivos: eles devem ser desligados ou dimensionados sob demanda.` : ''}`,
+        description: `Recursos de produção 24×7 são candidatos a CUD: 1 ano dá ~37% em Compute e ~${SQL_CUD_RATES.cud_1yr * 100}% em Cloud SQL. Comece por 1 ano e só vá para 3 anos com a arquitetura estável.${nonProd > 0 ? ` Não comprometa os ${nonProd} recurso(s) não produtivos: eles devem ser desligados ou dimensionados sob demanda.` : ''}`,
         practice: 'Otimização de custos › Usar descontos por compromisso para cargas previsíveis e estáveis.',
         impact: impactFromDelta(-savings1),
         monthlyDeltaUSD: -savings1,
@@ -347,14 +351,15 @@ export function generateWellArchitectedRecommendations(calculated: CalculatedCos
   );
   if (prodDisks.length > 0) {
     const totalGB = prodDisks.reduce((a, i) => a + ((i.bootDiskGB || 0) + (i.additionalDiskGB || 0)) * Math.max(1, i.quantity || 1), 0);
+    const snapshotCost = prodDisks.reduce((a, i) => a + ((i.bootDiskGB || 0) + (i.additionalDiskGB || 0)) * Math.max(1, i.quantity || 1) * snapshotGBMonthly(i.region), 0);
     recs.push({
       id: 'rel-snapshots',
       pillar: 'reliability',
       title: `Agendar snapshots dos discos de produção (${totalGB.toLocaleString('pt-BR')} GB)`,
-      description: `Configure snapshot schedules com retenção definida e, se exigido, armazenamento multirregional. Estimativa considera snapshots incrementais equivalentes a 1× o volume provisionado a US$ ${SNAPSHOT_GB_MONTHLY_USD}/GB·mês.`,
+      description: `Configure snapshot schedules com retenção definida e, se exigido, armazenamento multirregional. Estimativa considera snapshots incrementais equivalentes a 1× o volume provisionado, ao preço de snapshot padrão de cada região.`,
       practice: 'Confiabilidade › Definir RPO/RTO e implementar backup e recuperação testados.',
       impact: 'MEDIUM',
-      monthlyDeltaUSD: totalGB * SNAPSHOT_GB_MONTHLY_USD,
+      monthlyDeltaUSD: snapshotCost,
       deltaIsEstimate: true,
       affectedItemIds: prodDisks.map((i) => i.id),
     });
