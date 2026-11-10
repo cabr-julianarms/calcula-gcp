@@ -33,6 +33,8 @@ export type OperatingSystem = 'linux' | 'rhel' | 'windows' | 'sles';
 
 export type DiscountType = 'none' | 'sud' | 'cud_1yr' | 'cud_3yr' | 'spot';
 
+export type DiskType = 'pd-standard' | 'pd-balanced' | 'pd-ssd' | 'hyperdisk-balanced';
+
 export interface GCPPricingSKU {
   vcpuHourlyUSD: number;
   ramGBHourlyUSD: number;
@@ -87,6 +89,10 @@ export interface InventoryItem {
   egressGB?: number;
   ipCount?: number;
   unitCostUSD?: number;
+  networkType?: 'ip' | 'egress' | 'nat' | 'load_balancer' | 'vpn' | 'other';
+  
+  // Database Workload Flag (when hosted inside a VM)
+  isDatabaseWorkload?: boolean;
   
   // Selected default discount in table view
   discountType: DiscountType;
@@ -149,13 +155,15 @@ export interface CalculatedCostItem {
 export interface WellArchitectedRecommendation {
   id: string;
   itemId?: string;
-  category: 'cost_optimization' | 'performance' | 'resilience' | 'security';
+  category: 'cost_optimization' | 'performance' | 'resilience' | 'security' | 'operational_excellence';
+  pillar?: 'Cost Optimization' | 'Performance' | 'Reliability' | 'Operational Excellence' | 'Security';
   title: string;
   description: string;
   impact: 'HIGH' | 'MEDIUM' | 'LOW';
   potentialMonthlySavingsUSD: number;
-  actionType: 'APPLY_CUD_1YR' | 'APPLY_CUD_3YR' | 'MODERNIZE_MACHINE' | 'STORAGE_LIFECYCLE' | 'CONVERT_SPOT' | 'REGION_OPTIMIZATION' | 'HA_CHECK';
+  actionType: 'MODERNIZE_MACHINE' | 'OPTIMIZE_DISK' | 'STORAGE_LIFECYCLE' | 'CONVERT_SPOT' | 'HA_CHECK' | 'MIGRATE_DB_TO_MANAGED' | 'MIGRATE_DB_TO_VM' | 'APPLY_CUD_1YR' | 'APPLY_CUD_3YR';
   recommendedMachineType?: string;
+  recommendedDiskType?: 'pd-standard' | 'pd-balanced' | 'pd-ssd' | 'hyperdisk-balanced';
   recommendedStorageClass?: 'nearline' | 'coldline' | 'archive';
   recommendedRegion?: GCPRegion;
 }

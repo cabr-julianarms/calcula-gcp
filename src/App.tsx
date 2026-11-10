@@ -6,6 +6,7 @@ import { WellArchitectedCard } from './components/WellArchitectedCard';
 import { CostDashboard } from './components/CostDashboard';
 import { PricingInspectorModal } from './components/PricingInspectorModal';
 import { ExecutiveProposalModal } from './components/ExecutiveProposalModal';
+import { EditItemModal } from './components/EditItemModal';
 import { InventoryItem, CalculatedCostItem, GCPRegion, CalculatorSummary, WellArchitectedRecommendation } from './types/gcp';
 import { calculateItemCost, calculateSummary } from './services/pricingEngine';
 import { generateWellArchitectedRecommendations } from './services/wellArchitectedEngine';
@@ -47,6 +48,7 @@ export const App: React.FC = () => {
   
   // Modals state
   const [inspectingItem, setInspectingItem] = useState<CalculatedCostItem | null>(null);
+  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [isProposalOpen, setIsProposalOpen] = useState(false);
 
   // Sync to localStorage
@@ -109,12 +111,25 @@ export const App: React.FC = () => {
     setInventoryItems((prev) =>
       prev.map((item) => {
         if (item.id !== updated.id) return item;
-        // If machineType or region changed, clear spreadsheet custom overrides
+        // If core specs, disk, db, or network changed, clear spreadsheet custom overrides
         const specsChanged =
           item.machineType !== updated.machineType ||
           item.region !== updated.region ||
           item.vCPUs !== updated.vCPUs ||
-          item.ramGB !== updated.ramGB;
+          item.ramGB !== updated.ramGB ||
+          item.serviceType !== updated.serviceType ||
+          item.isDatabaseWorkload !== updated.isDatabaseWorkload ||
+          item.bootDiskType !== updated.bootDiskType ||
+          item.bootDiskGB !== updated.bootDiskGB ||
+          item.additionalDiskType !== updated.additionalDiskType ||
+          item.additionalDiskGB !== updated.additionalDiskGB ||
+          item.dbEngine !== updated.dbEngine ||
+          item.dbTier !== updated.dbTier ||
+          item.dbStorageGB !== updated.dbStorageGB ||
+          item.highAvailability !== updated.highAvailability ||
+          item.networkType !== updated.networkType ||
+          item.ipCount !== updated.ipCount ||
+          item.egressGB !== updated.egressGB;
 
         return {
           ...updated,
@@ -179,6 +194,39 @@ export const App: React.FC = () => {
           customCud3yrUSD: undefined,
         };
 
+        if (rec.actionType === 'OPTIMIZE_DISK' && rec.recommendedDiskType) {
+          return { ...base, bootDiskType: rec.recommendedDiskType };
+        }
+        if (rec.actionType === 'HA_CHECK') {
+          return { ...base, highAvailability: true };
+        }
+        if (rec.actionType === 'MIGRATE_DB_TO_MANAGED') {
+          return {
+            ...base,
+            serviceType: 'sql',
+            category: 'DATABASE',
+            isDatabaseWorkload: true,
+            dbEngine: base.dbEngine || 'MYSQL',
+            dbTier: 'db-custom-4-15360',
+            dbStorageGB: base.bootDiskGB || 100,
+            highAvailability: base.environment === 'prod',
+            gcpProductSuggested: `Cloud SQL for ${base.dbEngine || 'MySQL'}`,
+          };
+        }
+        if (rec.actionType === 'MIGRATE_DB_TO_VM') {
+          return {
+            ...base,
+            serviceType: 'compute',
+            category: 'COMPUTE',
+            isDatabaseWorkload: true,
+            machineType: 'e2-standard-4',
+            vCPUs: 4,
+            ramGB: 16,
+            bootDiskGB: base.dbStorageGB || 100,
+            bootDiskType: 'pd-balanced',
+            gcpProductSuggested: 'Compute Engine (Banco em VM)',
+          };
+        }
         if (rec.actionType === 'APPLY_CUD_3YR') {
           return { ...base, discountType: 'cud_3yr' };
         }
@@ -193,9 +241,6 @@ export const App: React.FC = () => {
         }
         if (rec.actionType === 'STORAGE_LIFECYCLE' && rec.recommendedStorageClass) {
           return { ...base, storageClass: rec.recommendedStorageClass };
-        }
-        if (rec.actionType === 'REGION_OPTIMIZATION' && rec.recommendedRegion) {
-          return { ...base, region: rec.recommendedRegion };
         }
         return base;
       })
@@ -228,6 +273,7 @@ export const App: React.FC = () => {
         onUpdateItem={handleUpdateItem}
         onDeleteItem={handleDeleteItem}
         onAddItem={handleAddItem}
+        onEditItem={setEditingItem}
         onInspectPrice={(calcItem) => setInspectingItem(calcItem)}
         currency={currency}
         exchangeRateBRL={exchangeRateBRL}
@@ -248,6 +294,16 @@ export const App: React.FC = () => {
         currency={currency}
         exchangeRateBRL={exchangeRateBRL}
       />
+
+      {/* Edit Item Modal */}
+      {editingItem && (
+        <EditItemModal
+          item={editingItem}
+          isOpen={!!editingItem}
+          onClose={() => setEditingItem(null)}
+          onSave={handleUpdateItem}
+        />
+      )}
 
       {/* Pricing Formula & SKU Inspector Modal */}
       <PricingInspectorModal

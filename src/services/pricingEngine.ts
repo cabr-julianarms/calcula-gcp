@@ -145,20 +145,74 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
     );
   }
 
-  // 5. Network (Egress, IP, NAT, LB) Calculation
+  // 5. Network (Egress, IP, NAT, LB, VPN) Calculation
   let baseNetworkMonthlyCost = 0;
   if (item.serviceType === 'network') {
-    if (item.ipCount && item.ipCount > 0) {
-      // In-Use External Public IPv4 Address: $0.005/hr * 730h = $3.65/month/IP
-      const ipRate = item.unitCostUSD ?? 3.65;
-      baseNetworkMonthlyCost += item.ipCount * ipRate * qty;
-      skuReferences.push(`Network SKU: External IPv4 Address in Use ($${ipRate.toFixed(2)}/IP/mês)`);
-    } else if (item.egressGB && item.egressGB > 0) {
+    const regionMultiplier = item.region === 'southamerica-east1' ? 1.35 : 1.0;
+    const textDesc = ((item.originalResourceName || item.name || '') + ' ' + (item.skuDetails || '')).toLowerCase();
+
+    if (item.networkType === 'ip' || (item.ipCount && item.ipCount > 0) || textDesc.includes('ip') || textDesc.includes('address')) {
+      const ipCount = item.ipCount || 1;
+      const ipRate = item.unitCostUSD ?? (3.65 * regionMultiplier);
+      baseNetworkMonthlyCost = ipCount * ipRate * qty;
+      skuReferences.push(`Network SKU: External IPv4 Address (${ipCount}x @ $${ipRate.toFixed(2)}/IP/mês)`);
+      auditFormulaSteps.push(
+        `6. Rede - Endereço IP Público Externo:`,
+        `   • ${ipCount} IP(s) x $${ipRate.toFixed(2)}/IP/mês x ${qty} uni = $${baseNetworkMonthlyCost.toFixed(2)} USD`
+      );
+    } else if (item.networkType === 'nat' || textDesc.includes('nat') || textDesc.includes('gateway')) {
+      const natGatewayRate = 32.85 * regionMultiplier; // $0.045/hr * 730h
+      const dataRate = 0.045 * regionMultiplier;
+      const dataProcessedGB = item.egressGB || 0;
+      const dataCost = dataProcessedGB * dataRate;
+      baseNetworkMonthlyCost = (natGatewayRate + dataCost) * qty;
+      skuReferences.push(`Network SKU: Cloud NAT Gateway ($${natGatewayRate.toFixed(2)}/mês + $${dataRate.toFixed(3)}/GB)`);
+      auditFormulaSteps.push(
+        `6. Rede - Cloud NAT Gateway:`,
+        `   • Gateway Fee: $${natGatewayRate.toFixed(2)}/mês x ${qty} uni`,
+        `   • Dados Processados: ${dataProcessedGB} GB x $${dataRate.toFixed(3)}/GB = $${(dataCost * qty).toFixed(2)} USD`,
+        `   • Subtotal Cloud NAT = $${baseNetworkMonthlyCost.toFixed(2)} USD`
+      );
+    } else if (item.networkType === 'load_balancer' || textDesc.includes('load balancer') || textDesc.includes('balanceador') || textDesc.includes('forwarding rule') || textDesc.includes('alb')) {
+      const lbRuleRate = 18.25 * regionMultiplier; // $0.025/hr * 730h
+      const lbDataRate = 0.008 * regionMultiplier;
+      const dataGB = item.egressGB || 0;
+      const dataCost = dataGB * lbDataRate;
+      baseNetworkMonthlyCost = (lbRuleRate + dataCost) * qty;
+      skuReferences.push(`Network SKU: Cloud Load Balancing (Forwarding Rule $${lbRuleRate.toFixed(2)}/mês + $${lbDataRate.toFixed(3)}/GB)`);
+      auditFormulaSteps.push(
+        `6. Rede - Cloud Load Balancing:`,
+        `   • Forwarding Rules (Regras de Encaminhamento): $${lbRuleRate.toFixed(2)}/mês x ${qty} uni`,
+        `   • Processamento de Tráfego: ${dataGB} GB x $${lbDataRate.toFixed(3)}/GB = $${(dataCost * qty).toFixed(2)} USD`,
+        `   • Subtotal Load Balancer = $${baseNetworkMonthlyCost.toFixed(2)} USD`
+      );
+    } else if (item.networkType === 'vpn' || textDesc.includes('vpn') || textDesc.includes('tunnel')) {
+      const vpnRate = 36.50 * regionMultiplier; // $0.05/hr * 730h
+      baseNetworkMonthlyCost = vpnRate * qty;
+      skuReferences.push(`Network SKU: Cloud HA VPN Tunnel ($${vpnRate.toFixed(2)}/túnel/mês)`);
+      auditFormulaSteps.push(
+        `6. Rede - Cloud HA VPN:`,
+        `   • 1 Túnel VPN x $${vpnRate.toFixed(2)}/mês x ${qty} uni = $${baseNetworkMonthlyCost.toFixed(2)} USD`
+      );
+    } else {
+      // General Egress / Data Transfer
+      const egressGB = item.egressGB || (item.unitCostUSD ? 0 : 100);
       const egressRate = item.unitCostUSD ?? pricing.egressGBUSD;
-      baseNetworkMonthlyCost += item.egressGB * egressRate * qty;
-      skuReferences.push(`Network Egress SKU: Premium Internet Egress ($${egressRate.toFixed(3)}/GB)`);
-    } else if (item.unitCostUSD && item.unitCostUSD > 0) {
-      baseNetworkMonthlyCost += item.unitCostUSD * qty;
+      if (item.unitCostUSD && !item.egressGB) {
+        baseNetworkMonthlyCost = item.unitCostUSD * qty;
+        skuReferences.push(`Network SKU: Tráfego/Rede Personalizado ($${item.unitCostUSD.toFixed(2)}/mês)`);
+        auditFormulaSteps.push(
+          `6. Rede - Tráfego / Serviço de Rede:`,
+          `   • Valor Mensal = $${baseNetworkMonthlyCost.toFixed(2)} USD`
+        );
+      } else {
+        baseNetworkMonthlyCost = egressGB * egressRate * qty;
+        skuReferences.push(`Network SKU: Premium Internet Egress ($${egressRate.toFixed(3)}/GB)`);
+        auditFormulaSteps.push(
+          `6. Rede - Tráfego de Saída (Internet Egress):`,
+          `   • ${egressGB} GB x $${egressRate.toFixed(3)}/GB x ${qty} uni = $${baseNetworkMonthlyCost.toFixed(2)} USD`
+        );
+      }
     }
   }
 
@@ -233,21 +287,36 @@ export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
   const originalResourceName = item.originalResourceName || item.name;
   
   let gcpProductSuggested = item.gcpProductSuggested || '';
-  if (!gcpProductSuggested) {
-    if (category === 'COMPUTE') gcpProductSuggested = 'Compute Engine';
-    else if (category === 'DATABASE') gcpProductSuggested = 'Cloud SQL';
+  if (!gcpProductSuggested || (item.isDatabaseWorkload && item.serviceType === 'compute')) {
+    if (item.serviceType === 'compute' && item.isDatabaseWorkload) gcpProductSuggested = 'Compute Engine (Banco em VM)';
+    else if (category === 'COMPUTE') gcpProductSuggested = 'Compute Engine';
+    else if (category === 'DATABASE' || item.serviceType === 'sql') gcpProductSuggested = `Cloud SQL (${item.dbEngine || 'MySQL'})`;
     else if (category === 'STORAGE') gcpProductSuggested = item.serviceType === 'storage' ? 'Cloud Storage' : 'Persistent Disk';
-    else if (category === 'NETWORK') gcpProductSuggested = item.ipCount ? 'VPC External IP' : 'Network Data Transfer';
+    else if (category === 'NETWORK') {
+      if (item.networkType === 'nat') gcpProductSuggested = 'Cloud NAT';
+      else if (item.networkType === 'load_balancer') gcpProductSuggested = 'Cloud Load Balancing';
+      else if (item.networkType === 'vpn') gcpProductSuggested = 'Cloud HA VPN';
+      else if (item.ipCount) gcpProductSuggested = 'VPC External IP';
+      else gcpProductSuggested = 'Network Data Transfer';
+    }
     else if (category === 'CDN') gcpProductSuggested = 'Cloud CDN';
     else gcpProductSuggested = 'Google Cloud Infrastructure';
   }
 
   let skuDetails = item.skuDetails || '';
-  if (!skuDetails) {
-    if (category === 'COMPUTE') skuDetails = `${item.machineType || 'e2-standard-2'} (${vcpus} vCPU / ${ramGB} GB RAM)`;
-    else if (category === 'DATABASE') skuDetails = `${item.dbTier || 'db-custom-2-8192'} (${item.dbEngine || 'MySQL'})`;
+  if (!skuDetails || (item.isDatabaseWorkload && item.serviceType === 'compute')) {
+    if (item.serviceType === 'compute') {
+      const diskInfo = item.bootDiskGB ? ` | ${item.bootDiskType || 'pd-balanced'} ${item.bootDiskGB}GB` : '';
+      skuDetails = `${item.machineType || 'e2-standard-2'} (${vcpus} vCPU / ${ramGB} GB RAM${diskInfo})`;
+    }
+    else if (category === 'DATABASE' || item.serviceType === 'sql') skuDetails = `${item.dbTier || 'db-custom-2-8192'} (${item.dbEngine || 'MySQL'}${item.highAvailability ? ', HA Multi-Zone' : ''})`;
     else if (category === 'STORAGE') skuDetails = item.bootDiskGB ? `${item.bootDiskType || 'pd-balanced'} (${item.bootDiskGB} GB)` : 'Standard Storage';
-    else if (category === 'NETWORK') skuDetails = item.ipCount ? `${item.ipCount} External IPv4 Address` : 'Internet Egress';
+    else if (category === 'NETWORK') {
+      if (item.ipCount) skuDetails = `${item.ipCount} Endereço(s) IPv4 Externo`;
+      else if (item.networkType === 'nat') skuDetails = 'Cloud NAT Gateway + Tráfego';
+      else if (item.networkType === 'load_balancer') skuDetails = 'Forwarding Rules + Tráfego';
+      else skuDetails = `${item.egressGB || 100} GB Internet Egress`;
+    }
     else skuDetails = item.name;
   }
 

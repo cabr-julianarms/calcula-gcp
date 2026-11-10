@@ -20,8 +20,8 @@ export function parseCSVInventory(csvContent: string, defaultRegion: GCPRegion =
     const cud1yRaw = cleanCurrency(row['Monthly Cost 1y Commit'] || row['Monthly Cost \n1y Commit ']);
     const cud3yRaw = cleanCurrency(row['Monthly Cost 3y Commit'] || row['Monthly Cost \n3y Commit ']);
 
-    const gcpProductSuggested = row['Produto GCP Sugerido'] || '';
-    const skuDetails = row['SKU/Machine Type GCP'] || row['machine_type'] || row['instance_type'] || '';
+    let gcpProductSuggested = row['Produto GCP Sugerido'] || '';
+    let skuDetails = row['SKU/Machine Type GCP'] || row['machine_type'] || row['instance_type'] || '';
     const technicalNotes = row['Notas Técnicas'] || row['Note'] || '';
 
     // Smart Category & Service Classification
@@ -38,18 +38,49 @@ export function parseCSVInventory(csvContent: string, defaultRegion: GCPRegion =
 
     // Dedicated Network / IP / Storage Handling
     let ipCount = 0;
+    let egressGB = 0;
+    let networkType: 'ip' | 'egress' | 'nat' | 'load_balancer' | 'vpn' | 'other' = 'other';
     const isComputeLike = category === 'COMPUTE' || serviceType === 'compute' || serviceType === 'gke';
     let defaultBootDisk = isComputeLike ? 50 : 0;
     let bootDiskGB = parseFloat(row['boot_disk_gb'] || row['boot_disk'] || (isComputeLike ? '50' : '0'));
     let dbStorageGB = parseFloat(row['db_storage_gb'] || (serviceType === 'sql' ? '100' : '0'));
     let unitCostUSD = paygRaw > 0 ? paygRaw : undefined;
 
-    if (category === 'NETWORK' && (originalName.toLowerCase().includes('ip') || skuDetails.toLowerCase().includes('ip'))) {
-      ipCount = 1;
-      if (paygRaw === 0) unitCostUSD = 3.65; // Standard GCP External IPv4 price
+    const fullText = (originalName + ' ' + gcpProductSuggested + ' ' + skuDetails + ' ' + technicalNotes).toLowerCase();
+    const rawUsage = parseFloat(row['Uso (Usage)'] || row['usage'] || row['Usage'] || row['egress_gb'] || row['traffic_gb'] || '0');
+
+    if (category === 'NETWORK' || serviceType === 'network') {
+      if (/\b(ip|ips|ipv4|ipv6)\b|public ip|ip address/.test(fullText)) {
+        networkType = 'ip';
+        ipCount = parseInt(row['ip_count'] || row['ips'] || row['quantity'] || '1', 10) || 1;
+        if (paygRaw === 0) unitCostUSD = 3.65;
+        if (!gcpProductSuggested) gcpProductSuggested = 'VPC External IP';
+        if (!skuDetails) skuDetails = `${ipCount} Endereço IPv4 Externo`;
+      } else if (fullText.includes('nat') || fullText.includes('gateway')) {
+        networkType = 'nat';
+        egressGB = isNaN(rawUsage) ? 0 : rawUsage;
+        if (!gcpProductSuggested) gcpProductSuggested = 'Cloud NAT';
+        if (!skuDetails) skuDetails = 'Cloud NAT Gateway + Processamento';
+      } else if (fullText.includes('load balancer') || fullText.includes('balanceador') || fullText.includes('forwarding rule') || fullText.includes('alb') || fullText.includes('nlb')) {
+        networkType = 'load_balancer';
+        egressGB = isNaN(rawUsage) ? 0 : rawUsage;
+        if (!gcpProductSuggested) gcpProductSuggested = 'Cloud Load Balancing';
+        if (!skuDetails) skuDetails = 'Forwarding Rules + Tráfego';
+      } else if (fullText.includes('vpn') || fullText.includes('tunnel') || fullText.includes('túnel')) {
+        networkType = 'vpn';
+        if (!gcpProductSuggested) gcpProductSuggested = 'Cloud VPN';
+        if (!skuDetails) skuDetails = 'Túnel HA VPN';
+      } else {
+        networkType = 'egress';
+        egressGB = !isNaN(rawUsage) && rawUsage > 0 ? rawUsage : (parseFloat(row['traffic_gb'] || row['egress_gb'] || '100') || 100);
+        if (!gcpProductSuggested) gcpProductSuggested = 'Network Data Transfer';
+        if (!skuDetails) skuDetails = `${egressGB} GB Internet Egress`;
+      }
     } else if (category === 'STORAGE' || serviceType === 'disk') {
       bootDiskGB = parseFloat(row['Uso (Usage)'] || row['boot_disk_gb'] || row['disk_gb'] || '50');
     }
+
+    const isDatabaseWorkload = category === 'DATABASE' || serviceType === 'sql' || fullText.includes('mysql') || fullText.includes('postgres') || fullText.includes('mariadb') || fullText.includes('sql server');
 
     return {
       id: `inv-${Date.now()}-${index}`,
@@ -79,6 +110,9 @@ export function parseCSVInventory(csvContent: string, defaultRegion: GCPRegion =
       highAvailability: (technicalNotes || '').toLowerCase().includes('ha'),
       dbStorageGB: isNaN(dbStorageGB) ? 0 : dbStorageGB,
       ipCount,
+      egressGB,
+      networkType,
+      isDatabaseWorkload,
       unitCostUSD,
       discountType: 'none', // Defaults to PAYG, user toggles or views 3 scenarios side-by-side
       customPaygUSD: paygRaw > 0 ? paygRaw : undefined,
@@ -130,13 +164,13 @@ function detectCategoryAndService(
   if (c.includes('SERVERLESS')) return { category: 'SERVERLESS', serviceType: 'compute' };
 
   // Fallback detection from keywords
-  if (n.includes('ipv4') || n.includes('ipv6') || n.includes('ip address') || n.includes('public ip') || n.includes('ip')) {
+  if (/\b(ip|ips|ipv4|ipv6)\b|public ip|ip address/.test(n)) {
     return { category: 'NETWORK', serviceType: 'network' };
   }
-  if (n.includes('nat') || n.includes('gateway') || n.includes('load balancer') || n.includes('traffic') || n.includes('egress')) {
+  if (n.includes('nat') || n.includes('gateway') || n.includes('load balancer') || n.includes('balanceador') || n.includes('traffic') || n.includes('egress') || n.includes('vpn')) {
     return { category: 'NETWORK', serviceType: 'network' };
   }
-  if (n.includes('mariadb') || n.includes('mysql') || n.includes('postgres') || n.includes('rds') || n.includes('sql')) {
+  if (n.includes('mariadb') || n.includes('mysql') || n.includes('postgres') || n.includes('rds') || n.includes('sql') || n.includes('oracle')) {
     return { category: 'DATABASE', serviceType: 'sql' };
   }
   if (n.includes('storage') || n.includes('ebs') || n.includes('disk') || n.includes('pd-') || n.includes('bucket')) {
@@ -184,11 +218,33 @@ export function parseJSONInventory(jsonContent: string, defaultRegion: GCPRegion
       }
 
       let ipCount = 0;
+      let egressGB = 0;
+      let networkType: 'ip' | 'egress' | 'nat' | 'load_balancer' | 'vpn' | 'other' = 'other';
       let unitCostUSD = paygRaw > 0 ? paygRaw : undefined;
-      if (category === 'NETWORK' && (originalName.toLowerCase().includes('ip') || skuDetails.toLowerCase().includes('ip'))) {
-        ipCount = 1;
-        if (paygRaw === 0) unitCostUSD = 3.65;
+
+      const fullText = (originalName + ' ' + gcpProductSuggested + ' ' + skuDetails + ' ' + technicalNotes).toLowerCase();
+      const rawUsage = parseFloat(row['Uso (Usage)'] || row['usage'] || row['Usage'] || row['egress_gb'] || row['traffic_gb'] || '0');
+
+      if (category === 'NETWORK' || serviceType === 'network') {
+        if (/\b(ip|ips|ipv4|ipv6)\b|public ip|ip address/.test(fullText)) {
+          networkType = 'ip';
+          ipCount = parseInt(row['ip_count'] || row['ips'] || row['quantity'] || '1', 10) || 1;
+          if (paygRaw === 0) unitCostUSD = 3.65;
+        } else if (fullText.includes('nat') || fullText.includes('gateway')) {
+          networkType = 'nat';
+          egressGB = isNaN(rawUsage) ? 0 : rawUsage;
+        } else if (fullText.includes('load balancer') || fullText.includes('balanceador') || fullText.includes('alb')) {
+          networkType = 'load_balancer';
+          egressGB = isNaN(rawUsage) ? 0 : rawUsage;
+        } else if (fullText.includes('vpn') || fullText.includes('tunnel')) {
+          networkType = 'vpn';
+        } else {
+          networkType = 'egress';
+          egressGB = !isNaN(rawUsage) && rawUsage > 0 ? rawUsage : (parseFloat(row['traffic_gb'] || row['egress_gb'] || '100') || 100);
+        }
       }
+
+      const isDatabaseWorkload = category === 'DATABASE' || serviceType === 'sql' || fullText.includes('mysql') || fullText.includes('postgres') || fullText.includes('mariadb');
 
       return {
         id: `inv-${Date.now()}-${index}`,
@@ -218,6 +274,9 @@ export function parseJSONInventory(jsonContent: string, defaultRegion: GCPRegion
         highAvailability: (technicalNotes || '').toLowerCase().includes('ha'),
         dbStorageGB: parseFloat(row.dbStorageGB || row.db_storage_gb || (serviceType === 'sql' ? '100' : '0')),
         ipCount,
+        egressGB,
+        networkType,
+        isDatabaseWorkload,
         unitCostUSD,
         discountType: 'none',
         customPaygUSD: paygRaw > 0 ? paygRaw : undefined,

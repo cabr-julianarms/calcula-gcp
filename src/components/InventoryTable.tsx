@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import {
-  Search, Plus, Trash2, ShieldCheck, Cpu, HardDrive, Database, Server, Filter, Globe, Network
+  Search, Plus, Trash2, ShieldCheck, Cpu, HardDrive, Database, Server, Filter, Globe, Network, Edit3
 } from 'lucide-react';
-import { InventoryItem, CalculatedCostItem, GCPResourceCategory, GCPRegion } from '../types/gcp';
+import { InventoryItem, CalculatedCostItem, GCPResourceCategory, GCPRegion, DiskType } from '../types/gcp';
 import { GCP_REGION_LABELS } from '../data/gcpPricingCatalog';
 import { formatCurrency } from '../utils/formatters';
 
@@ -11,6 +11,7 @@ interface InventoryTableProps {
   onUpdateItem: (item: InventoryItem) => void;
   onDeleteItem: (id: string) => void;
   onAddItem: () => void;
+  onEditItem: (item: InventoryItem) => void;
   onInspectPrice: (calculatedItem: CalculatedCostItem) => void;
   currency: 'USD' | 'BRL';
   exchangeRateBRL: number;
@@ -21,6 +22,7 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
   onUpdateItem,
   onDeleteItem,
   onAddItem,
+  onEditItem,
   onInspectPrice,
   currency,
   exchangeRateBRL,
@@ -206,12 +208,108 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
 
                     {/* SKU & Specs */}
                     <td style={{ padding: '12px 10px' }}>
-                      <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{skuDetails || item.machineType || 'Shape Customizado'}</div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {item.serviceType === 'compute' && `${item.vCPUs} vCPU | ${item.ramGB} GB RAM | ${item.operatingSystem?.toUpperCase()}`}
-                        {item.serviceType === 'sql' && `${item.dbEngine} | ${item.vCPUs} vCPU | ${item.ramGB} GB RAM`}
-                        {item.serviceType === 'disk' && `${item.bootDiskGB} GB Persistent Disk`}
-                        {item.serviceType === 'network' && (item.ipCount ? `${item.ipCount} Endereço IP Público` : 'Tráfego de Rede')}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{skuDetails || item.machineType || 'Shape Customizado'}</span>
+                        
+                        {/* Database Workload Badge */}
+                        {item.serviceType === 'sql' && (
+                          <span style={{
+                            fontSize: '0.65rem',
+                            padding: '1px 6px',
+                            borderRadius: '10px',
+                            background: 'rgba(168, 85, 247, 0.2)',
+                            color: '#c084fc',
+                            border: '1px solid rgba(168, 85, 247, 0.4)',
+                            fontWeight: 600
+                          }}>
+                            Cloud SQL PaaS
+                          </span>
+                        )}
+                        {item.serviceType === 'compute' && item.isDatabaseWorkload && (
+                          <span style={{
+                            fontSize: '0.65rem',
+                            padding: '1px 6px',
+                            borderRadius: '10px',
+                            background: 'rgba(249, 115, 22, 0.2)',
+                            color: '#fb923c',
+                            border: '1px solid rgba(249, 115, 22, 0.4)',
+                            fontWeight: 600
+                          }}>
+                            Banco em VM
+                          </span>
+                        )}
+                      </div>
+
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {item.serviceType === 'compute' && (
+                          <>
+                            <span>{item.vCPUs} vCPU | {item.ramGB} GB RAM | {item.operatingSystem?.toUpperCase()}</span>
+                            {/* Inline Disk Type Selector */}
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                              <HardDrive style={{ width: '11px', height: '11px', color: '#94a3b8' }} />
+                              <select
+                                value={item.bootDiskType || 'pd-balanced'}
+                                onChange={(e) => onUpdateItem({ ...item, bootDiskType: e.target.value as DiskType })}
+                                style={{
+                                  fontSize: '0.68rem',
+                                  padding: '1px 4px',
+                                  borderRadius: '3px',
+                                  background: 'rgba(255, 255, 255, 0.05)',
+                                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                                  color: '#cbd5e1',
+                                  cursor: 'pointer'
+                                }}
+                                title="Tipo de Disco de Boot"
+                              >
+                                <option value="pd-balanced" style={{ background: '#1e293b', color: '#fff' }}>pd-balanced</option>
+                                <option value="pd-standard" style={{ background: '#1e293b', color: '#fff' }}>pd-standard</option>
+                                <option value="pd-ssd" style={{ background: '#1e293b', color: '#fff' }}>pd-ssd</option>
+                                <option value="hyperdisk-balanced" style={{ background: '#1e293b', color: '#fff' }}>hyperdisk-bal</option>
+                              </select>
+                              <span>{item.bootDiskGB || 50} GB</span>
+                            </span>
+                          </>
+                        )}
+
+                        {item.serviceType === 'sql' && (
+                          <span>{item.dbEngine} | {item.vCPUs} vCPU | {item.ramGB} GB RAM | {item.dbStorageGB || 100} GB SSD {item.highAvailability ? '| HA Multi-Zone' : ''}</span>
+                        )}
+
+                        {item.serviceType === 'disk' && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                            <HardDrive style={{ width: '11px', height: '11px', color: '#facc15' }} />
+                            <select
+                              value={item.bootDiskType || 'pd-balanced'}
+                              onChange={(e) => onUpdateItem({ ...item, bootDiskType: e.target.value as DiskType })}
+                              style={{
+                                fontSize: '0.68rem',
+                                padding: '1px 4px',
+                                borderRadius: '3px',
+                                background: 'rgba(255, 255, 255, 0.05)',
+                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                color: '#facc15',
+                                cursor: 'pointer'
+                              }}
+                              title="Tipo de Disco"
+                            >
+                              <option value="pd-balanced" style={{ background: '#1e293b', color: '#fff' }}>pd-balanced</option>
+                              <option value="pd-standard" style={{ background: '#1e293b', color: '#fff' }}>pd-standard</option>
+                              <option value="pd-ssd" style={{ background: '#1e293b', color: '#fff' }}>pd-ssd</option>
+                              <option value="hyperdisk-balanced" style={{ background: '#1e293b', color: '#fff' }}>hyperdisk-bal</option>
+                            </select>
+                            <span>{item.bootDiskGB || 100} GB</span>
+                          </span>
+                        )}
+
+                        {item.serviceType === 'network' && (
+                          <span>
+                            {item.networkType === 'nat' && 'Cloud NAT Gateway + Processamento'}
+                            {item.networkType === 'load_balancer' && 'Cloud Load Balancing (Forwarding Rules)'}
+                            {item.networkType === 'vpn' && 'Cloud HA VPN Gateway'}
+                            {item.networkType === 'egress' && `${item.egressGB || 100} GB Tráfego de Saída (Internet Egress)`}
+                            {(!item.networkType || item.networkType === 'ip') && `${item.ipCount || 1} Endereço(s) IP Público Estático`}
+                          </span>
+                        )}
                       </div>
                     </td>
 
@@ -323,6 +421,16 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                     {/* Actions */}
                     <td style={{ padding: '12px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                        <button
+                          onClick={() => onEditItem(item)}
+                          className="btn btn-secondary"
+                          style={{ padding: '4px 8px', fontSize: '0.72rem', gap: '4px', borderColor: 'rgba(167, 139, 250, 0.4)', color: '#c084fc' }}
+                          title="Editar Configurações, Discos e Arquitetura"
+                        >
+                          <Edit3 style={{ width: '13px', height: '13px', color: '#c084fc' }} />
+                          Editar
+                        </button>
+
                         <button
                           onClick={() => onInspectPrice(calcItem)}
                           className="btn btn-secondary"

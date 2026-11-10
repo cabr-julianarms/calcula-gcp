@@ -80,13 +80,35 @@ export const WellArchitectedCard: React.FC<WellArchitectedCardProps> = ({
             }}
           >
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span className={`badge ${rec.impact === 'HIGH' ? 'badge-amber' : 'badge-blue'}`}>
-                  Impacto {rec.impact}
-                </span>
-                <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399' }}>
-                  -{format(rec.potentialMonthlySavingsUSD)}/mês
-                </span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span className={`badge ${rec.impact === 'HIGH' ? 'badge-amber' : 'badge-blue'}`}>
+                    {rec.impact}
+                  </span>
+                  {rec.pillar && (
+                    <span style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 600,
+                      padding: '2px 8px',
+                      borderRadius: '10px',
+                      background: 'rgba(99, 102, 241, 0.15)',
+                      color: '#a5b4fc',
+                      border: '1px solid rgba(99, 102, 241, 0.3)'
+                    }}>
+                      {rec.pillar}
+                    </span>
+                  )}
+                </div>
+
+                {rec.potentialMonthlySavingsUSD > 0 ? (
+                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399' }}>
+                    -{format(rec.potentialMonthlySavingsUSD)}/mês
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#60a5fa' }}>
+                    {rec.actionType === 'HA_CHECK' ? 'SLA 99.95% Multi-Zona' : 'Desempenho / I/O'}
+                  </span>
+                )}
               </div>
 
               <h4 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '6px' }}>{rec.title}</h4>
