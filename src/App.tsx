@@ -248,7 +248,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '24px 16px' }}>
+    <div style={{ maxWidth: '1720px', width: '96%', margin: '0 auto', padding: '32px 24px' }}>
       
       {/* Top Header & Summary */}
       <Header

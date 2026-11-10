@@ -147,34 +147,34 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Global Summary Bar: 3 Scenarios Side-by-Side */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-        gap: '16px',
-        marginTop: '20px',
-        paddingTop: '16px',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+        gap: '20px',
+        marginTop: '24px',
+        paddingTop: '20px',
         borderTop: '1px solid var(--border-color)'
       }}>
         {/* Total Items */}
-        <div style={{ background: 'rgba(15, 23, 42, 0.4)', padding: '12px 16px', borderRadius: 'var(--radius-md)' }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>TOTAL DE RECURSOS</div>
-          <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#ffffff' }}>{summary.totalItems} itens</div>
+        <div style={{ background: 'rgba(15, 23, 42, 0.45)', padding: '16px 20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Total de Recursos</div>
+          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#ffffff', marginTop: '4px' }}>{summary.totalItems} itens</div>
         </div>
 
         {/* Scenario 1: PAYG / On-Demand */}
-        <div style={{ background: 'rgba(15, 23, 42, 0.4)', padding: '12px 16px', borderRadius: 'var(--radius-md)', borderLeft: '3px solid #94a3b8' }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>1. SEM COMMIT (PAYG)</div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#f8fafc' }}>
+        <div style={{ background: 'rgba(15, 23, 42, 0.45)', padding: '16px 20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', borderLeft: '4px solid #94a3b8' }}>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.05em' }}>1. SEM COMMIT (PAYG)</div>
+          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#f8fafc', marginTop: '4px' }}>
             {format(summary.totalPaygMonthlyUSD)}
           </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Custo base sob demanda</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>Custo base sob demanda</div>
         </div>
 
         {/* Scenario 2: 1-Year CUD */}
-        <div style={{ background: 'rgba(56, 189, 248, 0.08)', padding: '12px 16px', borderRadius: 'var(--radius-md)', borderLeft: '3px solid #38bdf8' }}>
-          <div style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 600 }}>2. COMMIT 1 ANO (CUD 1Y)</div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#38bdf8' }}>
+        <div style={{ background: 'rgba(56, 189, 248, 0.08)', padding: '16px 20px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(56, 189, 248, 0.25)', borderLeft: '4px solid #38bdf8' }}>
+          <div style={{ fontSize: '0.78rem', color: '#38bdf8', fontWeight: 700, letterSpacing: '0.05em' }}>2. COMMIT 1 ANO (CUD 1Y)</div>
+          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#38bdf8', marginTop: '4px' }}>
             {format(summary.totalCud1yrMonthlyUSD)}
           </div>
-          <div style={{ fontSize: '0.7rem', color: '#38bdf8' }}>
+          <div style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 500, marginTop: '4px' }}>
             Economia: {format(summary.totalCud1yrSavingsUSD)}/mês (-{summary.totalCud1yrSavingsPct.toFixed(1)}%)
           </div>
         </div>
@@ -182,16 +182,16 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Scenario 3: 3-Year CUD */}
         <div style={{
           background: 'rgba(52, 211, 153, 0.1)',
-          border: '1px solid rgba(52, 211, 153, 0.2)',
-          borderLeft: '3px solid #34d399',
-          padding: '12px 16px',
+          border: '1px solid rgba(52, 211, 153, 0.3)',
+          borderLeft: '4px solid #34d399',
+          padding: '16px 20px',
           borderRadius: 'var(--radius-md)'
         }}>
-          <div style={{ fontSize: '0.75rem', color: '#34d399', fontWeight: 600 }}>3. COMMIT 3 ANOS (CUD 3Y)</div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#34d399' }}>
+          <div style={{ fontSize: '0.78rem', color: '#34d399', fontWeight: 700, letterSpacing: '0.05em' }}>3. COMMIT 3 ANOS (CUD 3Y)</div>
+          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#34d399', marginTop: '4px' }}>
             {format(summary.totalCud3yrMonthlyUSD)}
           </div>
-          <div style={{ fontSize: '0.7rem', color: '#34d399', fontWeight: 600 }}>
+          <div style={{ fontSize: '0.75rem', color: '#34d399', fontWeight: 600, marginTop: '4px' }}>
             Economia Max: {format(summary.totalCud3yrSavingsUSD)}/mês (-{summary.totalCud3yrSavingsPct.toFixed(1)}%)
           </div>
         </div>

@@ -63,49 +63,49 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
   };
 
   return (
-    <div className="glass-panel" style={{ padding: '20px', marginBottom: '24px' }}>
+    <div className="glass-panel" style={{ padding: '24px', marginBottom: '28px' }}>
       
       {/* Table Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
         
         {/* Search Input */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '280px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: '320px', flex: '1', maxWidth: '480px' }}>
           <Search style={{ width: '18px', height: '18px', color: 'var(--text-secondary)' }} />
           <input
             type="text"
-            placeholder="Buscar por recurso, SKU ou produto GCP..."
+            placeholder="Buscar por recurso, SKU, IP ou produto GCP..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            style={{ width: '100%', fontSize: '0.85rem' }}
+            style={{ width: '100%', fontSize: '0.88rem', padding: '9px 14px' }}
           />
         </div>
 
         {/* Category Filter */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Filter style={{ width: '14px', height: '14px', color: 'var(--text-secondary)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Filter style={{ width: '15px', height: '15px', color: 'var(--text-secondary)' }} />
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
-              style={{ padding: '6px 10px', fontSize: '0.8rem' }}
+              style={{ padding: '8px 12px', fontSize: '0.82rem' }}
             >
               <option value="all">Todas as Categorias</option>
               <option value="COMPUTE">COMPUTE (VMs / GKE)</option>
               <option value="DATABASE">DATABASE (Cloud SQL / DB)</option>
               <option value="STORAGE">STORAGE (Discos / Buckets)</option>
-              <option value="NETWORK">NETWORK (IPs / Redes / NAT)</option>
+              <option value="NETWORK">NETWORK (IPs Públicos / Redes / NAT)</option>
               <option value="CDN">CDN</option>
               <option value="OBSERVABILITY">OBSERVABILITY</option>
-              <option value="SECURITY">SECURITY</option>
+              <option value="SECURITY">SECURITY (SSL)</option>
             </select>
           </div>
 
           <button
             onClick={onAddItem}
             className="btn btn-primary"
-            style={{ padding: '8px 14px', fontSize: '0.82rem', gap: '6px' }}
+            style={{ padding: '9px 16px', fontSize: '0.85rem', gap: '6px' }}
           >
-            <Plus style={{ width: '14px', height: '14px' }} />
+            <Plus style={{ width: '15px', height: '15px' }} />
             Adicionar Item Manual
           </button>
         </div>
@@ -113,20 +113,20 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
 
       {/* Main Table */}
       <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.82rem' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.84rem' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-              <th style={{ padding: '12px 10px', fontWeight: 600 }}>Categoria</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600 }}>Recurso Origem & Produto GCP</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600 }}>SKU / Especificações</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, textAlign: 'center' }}>Qtd</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600 }}>Região</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right' }}>Sem Commit (PAYG)</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, color: '#38bdf8', textAlign: 'right' }}>Commit 1 Ano</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, color: '#34d399', textAlign: 'right' }}>Commit 3 Anos</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, textAlign: 'center' }}>Economia (3Y)</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600 }}>Notas Técnicas</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, textAlign: 'center' }}>Ações</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600 }}>Categoria</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600, minWidth: '180px' }}>Recurso Origem & Produto GCP</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600, minWidth: '260px' }}>SKU / Especificações & Arquitetura</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600, textAlign: 'center' }}>Qtd</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600 }}>Região</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right' }}>Sem Commit (PAYG)</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600, color: '#38bdf8', textAlign: 'right' }}>Commit 1 Ano</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600, color: '#34d399', textAlign: 'right' }}>Commit 3 Anos</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600, textAlign: 'center' }}>Economia (3Y)</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600, minWidth: '160px' }}>Notas Técnicas</th>
+              <th style={{ padding: '14px 12px', fontWeight: 600, textAlign: 'center' }}>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -207,15 +207,17 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                     </td>
 
                     {/* SKU & Specs */}
-                    <td style={{ padding: '12px 10px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{skuDetails || item.machineType || 'Shape Customizado'}</span>
+                    <td style={{ padding: '14px 12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.86rem' }}>
+                          {skuDetails || item.machineType || 'Shape Customizado'}
+                        </span>
                         
                         {/* Database Workload Badge */}
                         {item.serviceType === 'sql' && (
                           <span style={{
-                            fontSize: '0.65rem',
-                            padding: '1px 6px',
+                            fontSize: '0.68rem',
+                            padding: '2px 8px',
                             borderRadius: '10px',
                             background: 'rgba(168, 85, 247, 0.2)',
                             color: '#c084fc',
@@ -227,8 +229,8 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                         )}
                         {item.serviceType === 'compute' && item.isDatabaseWorkload && (
                           <span style={{
-                            fontSize: '0.65rem',
-                            padding: '1px 6px',
+                            fontSize: '0.68rem',
+                            padding: '2px 8px',
                             borderRadius: '10px',
                             background: 'rgba(249, 115, 22, 0.2)',
                             color: '#fb923c',
@@ -240,19 +242,19 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                         )}
                       </div>
 
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                         {item.serviceType === 'compute' && (
                           <>
                             <span>{item.vCPUs} vCPU | {item.ramGB} GB RAM | {item.operatingSystem?.toUpperCase()}</span>
                             {/* Inline Disk Type Selector */}
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                              <HardDrive style={{ width: '11px', height: '11px', color: '#94a3b8' }} />
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(255,255,255,0.03)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                              <HardDrive style={{ width: '12px', height: '12px', color: '#94a3b8' }} />
                               <select
                                 value={item.bootDiskType || 'pd-balanced'}
                                 onChange={(e) => onUpdateItem({ ...item, bootDiskType: e.target.value as DiskType })}
                                 style={{
-                                  fontSize: '0.68rem',
-                                  padding: '1px 4px',
+                                  fontSize: '0.72rem',
+                                  padding: '2px 4px',
                                   borderRadius: '3px',
                                   background: 'rgba(255, 255, 255, 0.05)',
                                   border: '1px solid rgba(255, 255, 255, 0.15)',
@@ -268,22 +270,73 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                               </select>
                               <span>{item.bootDiskGB || 50} GB</span>
                             </span>
+
+                            {/* Option to toggle HA for database VM */}
+                            {item.isDatabaseWorkload && (
+                              <button
+                                type="button"
+                                onClick={() => onUpdateItem({ ...item, highAvailability: !item.highAvailability })}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '2px 8px',
+                                  borderRadius: '12px',
+                                  fontSize: '0.68rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s',
+                                  backgroundColor: item.highAvailability ? 'rgba(52, 211, 153, 0.2)' : 'rgba(255, 255, 255, 0.06)',
+                                  color: item.highAvailability ? '#34d399' : '#94a3b8',
+                                  border: `1px solid ${item.highAvailability ? 'rgba(52, 211, 153, 0.4)' : 'rgba(255, 255, 255, 0.2)'}`
+                                }}
+                                title={item.highAvailability ? 'Alta Disponibilidade ativada (Clique para desativar)' : 'Clique para habilitar Alta Disponibilidade (Multi-Zone HA)'}
+                              >
+                                <ShieldCheck style={{ width: '12px', height: '12px' }} />
+                                {item.highAvailability ? '✓ HA Ativo' : '+ Habilitar HA'}
+                              </button>
+                            )}
                           </>
                         )}
 
                         {item.serviceType === 'sql' && (
-                          <span>{item.dbEngine} | {item.vCPUs} vCPU | {item.ramGB} GB RAM | {item.dbStorageGB || 100} GB SSD {item.highAvailability ? '| HA Multi-Zone' : ''}</span>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <span>{item.dbEngine} | {item.vCPUs} vCPU | {item.ramGB} GB RAM | {item.dbStorageGB || 100} GB SSD</span>
+                            {/* Direct HA Toggle for Cloud SQL */}
+                            <button
+                              type="button"
+                              onClick={() => onUpdateItem({ ...item, highAvailability: !item.highAvailability })}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '2px 8px',
+                                borderRadius: '12px',
+                                fontSize: '0.68rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                backgroundColor: item.highAvailability ? 'rgba(52, 211, 153, 0.2)' : 'rgba(255, 255, 255, 0.06)',
+                                color: item.highAvailability ? '#34d399' : '#94a3b8',
+                                border: `1px solid ${item.highAvailability ? 'rgba(52, 211, 153, 0.4)' : 'rgba(255, 255, 255, 0.2)'}`
+                              }}
+                              title={item.highAvailability ? 'Alta Disponibilidade Multi-Zone ativada no Cloud SQL (Clique para alternar para Single-Zone)' : 'Clique para ativar Alta Disponibilidade Multi-Zone (SLA 99.95%)'}
+                            >
+                              <ShieldCheck style={{ width: '12px', height: '12px' }} />
+                              {item.highAvailability ? '✓ HA Ativo (Multi-Zone)' : '+ Habilitar HA (Multi-Zone)'}
+                            </button>
+                          </div>
                         )}
 
                         {item.serviceType === 'disk' && (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                            <HardDrive style={{ width: '11px', height: '11px', color: '#facc15' }} />
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(255,255,255,0.03)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <HardDrive style={{ width: '12px', height: '12px', color: '#facc15' }} />
                             <select
                               value={item.bootDiskType || 'pd-balanced'}
                               onChange={(e) => onUpdateItem({ ...item, bootDiskType: e.target.value as DiskType })}
                               style={{
-                                fontSize: '0.68rem',
-                                padding: '1px 4px',
+                                fontSize: '0.72rem',
+                                padding: '2px 4px',
                                 borderRadius: '3px',
                                 background: 'rgba(255, 255, 255, 0.05)',
                                 border: '1px solid rgba(255, 255, 255, 0.15)',
@@ -302,7 +355,8 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                         )}
 
                         {item.serviceType === 'network' && (
-                          <span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <Network style={{ width: '12px', height: '12px', color: '#2dd4bf' }} />
                             {item.networkType === 'nat' && 'Cloud NAT Gateway + Processamento'}
                             {item.networkType === 'load_balancer' && 'Cloud Load Balancing (Forwarding Rules)'}
                             {item.networkType === 'vpn' && 'Cloud HA VPN Gateway'}

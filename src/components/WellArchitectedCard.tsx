@@ -35,35 +35,35 @@ export const WellArchitectedCard: React.FC<WellArchitectedCardProps> = ({
   }
 
   return (
-    <div className="glass-panel" style={{ padding: '20px', marginBottom: '24px' }}>
+    <div className="glass-panel" style={{ padding: '24px', marginBottom: '28px' }}>
       
       {/* Panel Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{
             background: 'rgba(139, 92, 246, 0.2)',
-            padding: '8px',
-            borderRadius: '10px',
+            padding: '10px',
+            borderRadius: '12px',
             color: '#c084fc'
           }}>
-            <Sparkles style={{ width: '20px', height: '20px' }} />
+            <Sparkles style={{ width: '22px', height: '22px' }} />
           </div>
           <div>
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Recomendações GCP Well-Architected Framework</h3>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              Otimizações automáticas de arquitetura e mitigação de desperdício de nuvem
+            <h3 style={{ fontSize: '1.2rem', fontWeight: 700 }}>Recomendações GCP Well-Architected Framework</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              Otimizações de confiabilidade (HA), modernização e mitigação de desperdício
             </p>
           </div>
         </div>
 
         {/* Total Savings Highlight */}
-        <div className="badge badge-green" style={{ padding: '6px 14px', fontSize: '0.85rem' }}>
-          <TrendingDown style={{ width: '14px', height: '14px' }} /> Economia Potencial: {format(totalPotentialSavingsUSD)}/mês
+        <div className="badge badge-green" style={{ padding: '8px 16px', fontSize: '0.88rem' }}>
+          <TrendingDown style={{ width: '15px', height: '15px' }} /> Economia Potencial: {format(totalPotentialSavingsUSD)}/mês
         </div>
       </div>
 
       {/* List of Recommendations */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '20px' }}>
         {recommendations.map((rec) => (
           <div
             key={rec.id}
