@@ -1,116 +1,60 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText, Download, Code, CheckCircle, AlertCircle } from 'lucide-react';
-import { InventoryItem, GCPRegion } from '../types/gcp';
+import { Upload, FileText, Download, CheckCircle, AlertCircle } from 'lucide-react';
+import { InventoryItem } from '../types/gcp';
 import {
   parseCSVInventory,
   parseJSONInventory,
   parseYAMLInventory,
   parseTerraformHCL,
   generateSampleCSV,
-  generateSampleJSON
+  generateSampleJSON,
 } from '../services/inventoryParser';
+import { regionLabel } from '../data/regions';
 
 interface InventoryUploaderProps {
   onItemsImported: (items: InventoryItem[]) => void;
-  defaultRegion?: GCPRegion;
+  defaultRegion: string;
 }
 
-export const InventoryUploader: React.FC<InventoryUploaderProps> = ({ onItemsImported, defaultRegion = 'us-central1' }) => {
-  const [activeTab, setActiveTab] = useState<'upload' | 'paste'>('upload');
+type Format = 'csv' | 'json' | 'yaml' | 'terraform';
+
+export const InventoryUploader: React.FC<InventoryUploaderProps> = ({ onItemsImported, defaultRegion }) => {
+  const [mode, setMode] = useState<'file' | 'paste'>('file');
   const [pastedText, setPastedText] = useState('');
-  const [pasteFormat, setPasteFormat] = useState<'csv' | 'json' | 'terraform'>('csv');
+  const [pasteFormat, setPasteFormat] = useState<Format>('csv');
   const [dragActive, setDragActive] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  
+  const [status, setStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const parse = (content: string, format: Format): InventoryItem[] => {
+    switch (format) {
+      case 'json': return parseJSONInventory(content, defaultRegion);
+      case 'yaml': return parseYAMLInventory(content, defaultRegion);
+      case 'terraform': return parseTerraformHCL(content, defaultRegion);
+      default: return parseCSVInventory(content, defaultRegion);
+    }
+  };
+
+  const report = (items: InventoryItem[], source: string) => {
+    if (items.length > 0) {
+      onItemsImported(items);
+      setStatus({ type: 'success', text: `${items.length} recurso(s) importado(s) de ${source}.` });
+    } else {
+      setStatus({ type: 'error', text: `Nenhum recurso reconhecido em ${source}. Confira o formato ou baixe um modelo.` });
+    }
+  };
+
   const processFile = (file: File) => {
+    const name = file.name.toLowerCase();
+    const format: Format = name.endsWith('.json') ? 'json' : /\.ya?ml$/.test(name) ? 'yaml' : name.endsWith('.tf') ? 'terraform' : 'csv';
     const reader = new FileReader();
-    const fileName = file.name.toLowerCase();
-
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
-      if (!content) return;
-
-      let imported: InventoryItem[] = [];
-
-      if (fileName.endsWith('.csv')) {
-        imported = parseCSVInventory(content, defaultRegion);
-      } else if (fileName.endsWith('.json')) {
-        imported = parseJSONInventory(content);
-      } else if (fileName.endsWith('.yaml') || fileName.endsWith('.yml')) {
-        imported = parseYAMLInventory(content);
-      } else if (fileName.endsWith('.tf') || fileName.includes('terraform')) {
-        imported = parseTerraformHCL(content);
-      } else {
-        // Default fallback to CSV
-        imported = parseCSVInventory(content, defaultRegion);
-      }
-
-      if (imported.length > 0) {
-        onItemsImported(imported);
-        setStatusMessage({
-          type: 'success',
-          text: `Sucesso! ${imported.length} item(ns) importado(s) do arquivo "${file.name}".`
-        });
-      } else {
-        setStatusMessage({
-          type: 'error',
-          text: `Não foi possível identificar itens válidos no arquivo "${file.name}". Verifique o formato.`
-        });
-      }
-    };
-
+    reader.onload = (e) => report(parse(String(e.target?.result || ''), format), `"${file.name}"`);
+    reader.onerror = () => setStatus({ type: 'error', text: `Não foi possível ler "${file.name}".` });
     reader.readAsText(file);
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(true);
-  };
-
-  const handleDragLeave = () => {
-    setDragActive(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      processFile(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleProcessPastedText = () => {
-    if (!pastedText.trim()) return;
-
-    let imported: InventoryItem[] = [];
-    if (pasteFormat === 'csv') {
-      imported = parseCSVInventory(pastedText, defaultRegion);
-    } else if (pasteFormat === 'json') {
-      imported = parseJSONInventory(pastedText);
-    } else if (pasteFormat === 'terraform') {
-      imported = parseTerraformHCL(pastedText);
-    }
-
-    if (imported.length > 0) {
-      onItemsImported(imported);
-      setStatusMessage({
-        type: 'success',
-        text: `Sucesso! ${imported.length} item(ns) importado(s) a partir do texto.`
-      });
-      setPastedText('');
-    } else {
-      setStatusMessage({
-        type: 'error',
-        text: 'Erro ao interpretar o texto. Verifique o formato selecionado.'
-      });
-    }
-  };
-
-  const downloadFile = (filename: string, content: string, contentType: string) => {
-    const blob = new Blob([content], { type: contentType });
-    const url = URL.createObjectURL(blob);
+  const download = (filename: string, content: string, type: string) => {
+    const url = URL.createObjectURL(new Blob([content], { type }));
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
@@ -119,129 +63,90 @@ export const InventoryUploader: React.FC<InventoryUploaderProps> = ({ onItemsImp
   };
 
   return (
-    <div className="glass-panel" style={{ padding: '20px', marginBottom: '24px' }}>
-      
-      {/* Header Tabs */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button
-            className={`btn ${activeTab === 'upload' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('upload')}
-          >
-            <Upload style={{ width: '16px', height: '16px' }} /> Upload de Arquivo (CSV / JSON / YAML / Terraform)
-          </button>
-          <button
-            className={`btn ${activeTab === 'paste' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('paste')}
-          >
-            <Code style={{ width: '16px', height: '16px' }} /> Colar Texto / HCL
-          </button>
+    <div className="importer">
+      <div className="toolbar" style={{ marginBottom: 12 }}>
+        <div className="seg" role="group" aria-label="Forma de importação">
+          <button aria-pressed={mode === 'file'} onClick={() => setMode('file')}>Arquivo</button>
+          <button aria-pressed={mode === 'paste'} onClick={() => setMode('paste')}>Colar texto</button>
         </div>
-
-        {/* Template Downloads */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Modelos de Exemplo:</span>
-          <button
-            className="btn btn-secondary"
-            style={{ padding: '4px 10px', fontSize: '0.75rem' }}
-            onClick={() => downloadFile('modelo-inventario-gcp.csv', generateSampleCSV(), 'text/csv')}
-          >
-            <Download style={{ width: '12px', height: '12px' }} /> Modelo CSV
-          </button>
-          <button
-            className="btn btn-secondary"
-            style={{ padding: '4px 10px', fontSize: '0.75rem' }}
-            onClick={() => downloadFile('modelo-inventario-gcp.json', generateSampleJSON(), 'application/json')}
-          >
-            <Download style={{ width: '12px', height: '12px' }} /> Modelo JSON
-          </button>
-        </div>
+        <div className="spacer" />
+        <span className="faint" style={{ fontSize: '0.76rem' }}>Modelos:</span>
+        <button className="btn btn-sm btn-ghost" onClick={() => download('modelo-inventario-gcp.csv', generateSampleCSV(), 'text/csv')}>
+          <Download /> CSV
+        </button>
+        <button className="btn btn-sm btn-ghost" onClick={() => download('modelo-inventario-gcp.json', generateSampleJSON(), 'application/json')}>
+          <Download /> JSON
+        </button>
       </div>
 
-      {/* Tab 1: File Drop Zone */}
-      {activeTab === 'upload' && (
+      {mode === 'file' ? (
         <div
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
+          className={`dropzone ${dragActive ? 'active' : ''}`}
+          role="button"
+          tabIndex={0}
           onClick={() => fileInputRef.current?.click()}
-          style={{
-            border: `2px dashed ${dragActive ? 'var(--gcp-blue)' : 'var(--border-color-strong)'}`,
-            borderRadius: 'var(--radius-lg)',
-            padding: '32px 20px',
-            textAlign: 'center',
-            cursor: 'pointer',
-            background: dragActive ? 'rgba(66, 133, 244, 0.1)' : 'rgba(15, 23, 42, 0.3)',
-            transition: 'var(--transition)',
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && fileInputRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+            Array.from(e.dataTransfer.files).forEach(processFile);
           }}
         >
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv, .json, .yaml, .yml, .tf"
-            style={{ display: 'none' }}
+            accept=".csv,.json,.yaml,.yml,.tf,.txt"
+            multiple
+            hidden
             onChange={(e) => {
-              if (e.target.files && e.target.files[0]) {
-                processFile(e.target.files[0]);
-              }
+              Array.from(e.target.files || []).forEach(processFile);
+              e.target.value = '';
             }}
           />
-          <Upload style={{ width: '36px', height: '36px', color: 'var(--gcp-blue)', marginBottom: '12px' }} />
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '4px' }}>
-            Arraste e solte seu arquivo de inventário aqui
-          </h3>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            Suporta CSV, JSON, YAML, arquivos Terraform (.tf) ou exportação do GCP Cloud Asset Inventory
-          </p>
+          <Upload />
+          <h4>Arraste arquivos aqui ou clique para escolher</h4>
+          <p>CSV, JSON, YAML, Terraform (.tf) ou export do Cloud Asset Inventory</p>
+          <p className="faint" style={{ marginTop: 6 }}>Itens sem região vão para {regionLabel(defaultRegion)}</p>
         </div>
-      )}
-
-      {/* Tab 2: Text Paste */}
-      {activeTab === 'paste' && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Formato do Texto:</span>
-            <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
-              <input type="radio" name="fmt" checked={pasteFormat === 'csv'} onChange={() => setPasteFormat('csv')} /> CSV
-            </label>
-            <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
-              <input type="radio" name="fmt" checked={pasteFormat === 'json'} onChange={() => setPasteFormat('json')} /> JSON
-            </label>
-            <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
-              <input type="radio" name="fmt" checked={pasteFormat === 'terraform'} onChange={() => setPasteFormat('terraform')} /> Terraform HCL
-            </label>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="seg" role="group" aria-label="Formato do texto" style={{ alignSelf: 'flex-start' }}>
+            {(['csv', 'json', 'yaml', 'terraform'] as Format[]).map((fmt) => (
+              <button key={fmt} aria-pressed={pasteFormat === fmt} onClick={() => setPasteFormat(fmt)}>
+                {fmt === 'terraform' ? 'Terraform' : fmt.toUpperCase()}
+              </button>
+            ))}
           </div>
-
           <textarea
-            rows={5}
+            rows={6}
+            className="mono"
             value={pastedText}
             onChange={(e) => setPastedText(e.target.value)}
-            placeholder={`Cole aqui o conteúdo em formato ${pasteFormat.toUpperCase()}...`}
-            style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.85rem', marginBottom: '12px' }}
+            placeholder={`Cole o conteúdo ${pasteFormat === 'terraform' ? 'HCL' : pasteFormat.toUpperCase()} aqui…`}
+            aria-label="Conteúdo do inventário"
           />
-
-          <button className="btn btn-primary" onClick={handleProcessPastedText}>
-            <FileText style={{ width: '16px', height: '16px' }} /> Processar e Inserir no Inventário
-          </button>
+          <div>
+            <button
+              className="btn btn-primary"
+              disabled={!pastedText.trim()}
+              onClick={() => {
+                const items = parse(pastedText, pasteFormat);
+                report(items, 'texto colado');
+                if (items.length) setPastedText('');
+              }}
+            >
+              <FileText /> Importar
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Status Feedback Notification */}
-      {statusMessage && (
-        <div style={{
-          marginTop: '16px',
-          padding: '10px 14px',
-          borderRadius: 'var(--radius-md)',
-          fontSize: '0.85rem',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          background: statusMessage.type === 'success' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-          color: statusMessage.type === 'success' ? '#34d399' : '#f87171',
-          border: `1px solid ${statusMessage.type === 'success' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`
-        }}>
-          {statusMessage.type === 'success' ? <CheckCircle style={{ width: '16px', height: '16px' }} /> : <AlertCircle style={{ width: '16px', height: '16px' }} />}
-          {statusMessage.text}
+      {status && (
+        <div className={`notice notice-${status.type}`} role="status">
+          {status.type === 'success' ? <CheckCircle /> : <AlertCircle />}
+          {status.text}
         </div>
       )}
     </div>

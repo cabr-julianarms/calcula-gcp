@@ -1,201 +1,139 @@
 import React from 'react';
-import { Calculator, DollarSign, Globe, Sparkles, ShieldCheck, Trash2, FileSpreadsheet } from 'lucide-react';
-import { GCPRegion, CalculatorSummary } from '../types/gcp';
-import { GCP_REGION_LABELS } from '../data/gcpPricingCatalog';
+import { Calculator, FileText, Trash2, FlaskConical, Globe } from 'lucide-react';
+import { CalculatorSummary } from '../types/gcp';
 import { formatCurrency } from '../utils/formatters';
+import { RegionSelect } from './ui';
 
 interface HeaderProps {
-  defaultRegion: GCPRegion;
-  setDefaultRegion: (region: GCPRegion) => void;
+  defaultRegion: string;
+  setDefaultRegion: (region: string) => void;
+  onApplyRegionToAll: () => void;
   currency: 'USD' | 'BRL';
   setCurrency: (currency: 'USD' | 'BRL') => void;
   exchangeRateBRL: number;
   setExchangeRateBRL: (rate: number) => void;
-  summary: CalculatorSummary;
+  itemCount: number;
   onOpenProposal: () => void;
-  onClearInventory?: () => void;
-  onLoadSampleData?: () => void;
+  onClearInventory: () => void;
+  onLoadSampleData: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   defaultRegion,
   setDefaultRegion,
+  onApplyRegionToAll,
   currency,
   setCurrency,
   exchangeRateBRL,
   setExchangeRateBRL,
-  summary,
+  itemCount,
   onOpenProposal,
   onClearInventory,
   onLoadSampleData,
-}) => {
-  const format = (amountUSD: number) => formatCurrency(amountUSD, currency, exchangeRateBRL);
+}) => (
+  <header className="panel topbar">
+    <div className="brand">
+      <div className="brand-logo">
+        <Calculator size={20} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <h1>Calculadora GCP</h1>
+        <p>Inventário → custo no Google Cloud em 3 cenários, com revisão Well-Architected</p>
+      </div>
+    </div>
 
-  return (
-    <header className="glass-panel" style={{ padding: '16px 24px', marginBottom: '24px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
-        
-        {/* Brand & Title */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            background: 'linear-gradient(135deg, #4285f4, #8b5cf6)',
-            width: '42px',
-            height: '42px',
-            borderRadius: '12px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 15px rgba(66, 133, 244, 0.4)'
-          }}>
-            <Calculator style={{ color: '#ffffff', width: '22px', height: '22px' }} />
-          </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <h1 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Calculadora GCP & Engine de Inventário</h1>
-              <span className="badge badge-blue">
-                <ShieldCheck style={{ width: '12px', height: '12px' }} /> Paridade 99.8% GCP
-              </span>
-            </div>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              Auditoria de custos, precificação transparente (PAYG vs CUD 1Y vs CUD 3Y) & Well-Architected Framework
-            </p>
-          </div>
-        </div>
-
-        {/* Global Controls & Actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          
-          {/* Default Region Selector */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Globe style={{ width: '16px', height: '16px', color: 'var(--text-secondary)' }} />
-            <select
-              value={defaultRegion}
-              onChange={(e) => setDefaultRegion(e.target.value as GCPRegion)}
-              style={{ padding: '6px 12px', fontSize: '0.85rem' }}
-              title="Região Padrão para Novos Itens"
-            >
-              {Object.entries(GCP_REGION_LABELS).map(([key, label]) => (
-                <option key={key} value={key}>{label}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Currency Switcher */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(15, 23, 42, 0.6)', padding: '4px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <button
-              className={`btn ${currency === 'USD' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '4px 10px', fontSize: '0.75rem', borderRadius: '6px' }}
-              onClick={() => setCurrency('USD')}
-            >
-              <DollarSign style={{ width: '12px', height: '12px' }} /> USD ($)
-            </button>
-            <button
-              className={`btn ${currency === 'BRL' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '4px 10px', fontSize: '0.75rem', borderRadius: '6px' }}
-              onClick={() => setCurrency('BRL')}
-            >
-              R$ BRL
-            </button>
-          </div>
-
-          {currency === 'BRL' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>USD/BRL:</span>
-              <input
-                type="number"
-                step="0.05"
-                value={exchangeRateBRL}
-                onChange={(e) => setExchangeRateBRL(parseFloat(e.target.value) || 5.50)}
-                style={{ width: '70px', padding: '4px 8px', fontSize: '0.8rem' }}
-              />
-            </div>
-          )}
-
-          {/* Quick Actions: Load Sample & Clear */}
-          {onLoadSampleData && (
-            <button
-              className="btn btn-secondary"
-              onClick={onLoadSampleData}
-              style={{ padding: '6px 12px', fontSize: '0.8rem', gap: '6px' }}
-              title="Carregar itens de exemplo preenchidos"
-            >
-              <FileSpreadsheet style={{ width: '14px', height: '14px', color: '#60a5fa' }} />
-              Exemplo
-            </button>
-          )}
-
-          {onClearInventory && summary.totalItems > 0 && (
-            <button
-              className="btn btn-secondary"
-              onClick={onClearInventory}
-              style={{ padding: '6px 12px', fontSize: '0.8rem', gap: '6px', color: 'var(--accent-red)' }}
-              title="Limpar todos os recursos do inventário"
-            >
-              <Trash2 style={{ width: '14px', height: '14px' }} />
-              Limpar
-            </button>
-          )}
-
-          {/* Export Proposal Button */}
-          <button className="btn btn-success" onClick={onOpenProposal} style={{ padding: '7px 14px', fontSize: '0.85rem' }}>
-            <Sparkles style={{ width: '15px', height: '15px' }} />
-            Gerar Proposta Executiva
+    <div className="controls">
+      <div className="control-group">
+        <Globe size={15} className="faint" aria-hidden />
+        <RegionSelect
+          value={defaultRegion}
+          onChange={setDefaultRegion}
+          ariaLabel="Região padrão para novos itens e importações"
+          className="input-sm"
+        />
+        {itemCount > 0 && (
+          <button className="btn btn-ghost btn-sm" onClick={onApplyRegionToAll} title="Mover todos os itens do inventário para a região padrão">
+            Aplicar a todos
           </button>
-        </div>
+        )}
       </div>
 
-      {/* Global Summary Bar: 3 Scenarios Side-by-Side */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-        gap: '20px',
-        marginTop: '24px',
-        paddingTop: '20px',
-        borderTop: '1px solid var(--border-color)'
-      }}>
-        {/* Total Items */}
-        <div style={{ background: 'rgba(15, 23, 42, 0.45)', padding: '16px 20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Total de Recursos</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#ffffff', marginTop: '4px' }}>{summary.totalItems} itens</div>
+      <div className="control-group">
+        <div className="seg" role="group" aria-label="Moeda">
+          <button aria-pressed={currency === 'USD'} onClick={() => setCurrency('USD')}>USD</button>
+          <button aria-pressed={currency === 'BRL'} onClick={() => setCurrency('BRL')}>BRL</button>
         </div>
+        {currency === 'BRL' && (
+          <label className="control-group" title="Cotação USD → BRL">
+            <span className="control-label">US$1 =</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0.01"
+              className="input-sm"
+              style={{ width: 76 }}
+              value={exchangeRateBRL}
+              onChange={(e) => setExchangeRateBRL(parseFloat(e.target.value) || 0)}
+              onBlur={(e) => !(parseFloat(e.target.value) > 0) && setExchangeRateBRL(5.5)}
+            />
+          </label>
+        )}
+      </div>
 
-        {/* Scenario 1: PAYG / On-Demand */}
-        <div style={{ background: 'rgba(15, 23, 42, 0.45)', padding: '16px 20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', borderLeft: '4px solid #94a3b8' }}>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.05em' }}>1. SEM COMMIT (PAYG)</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#f8fafc', marginTop: '4px' }}>
-            {format(summary.totalPaygMonthlyUSD)}
-          </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>Custo base sob demanda</div>
-        </div>
+      <div className="control-group">
+        <button className="btn btn-sm" onClick={onLoadSampleData} title="Substituir o inventário por um exemplo">
+          <FlaskConical /> Exemplo
+        </button>
+        {itemCount > 0 && (
+          <button className="btn btn-sm btn-ghost btn-danger" onClick={onClearInventory} title="Remover todos os itens">
+            <Trash2 /> Limpar
+          </button>
+        )}
+        <button className="btn btn-sm btn-success" onClick={onOpenProposal} disabled={itemCount === 0}>
+          <FileText /> Proposta
+        </button>
+      </div>
+    </div>
+  </header>
+);
 
-        {/* Scenario 2: 1-Year CUD */}
-        <div style={{ background: 'rgba(56, 189, 248, 0.08)', padding: '16px 20px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(56, 189, 248, 0.25)', borderLeft: '4px solid #38bdf8' }}>
-          <div style={{ fontSize: '0.78rem', color: '#38bdf8', fontWeight: 700, letterSpacing: '0.05em' }}>2. COMMIT 1 ANO (CUD 1Y)</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#38bdf8', marginTop: '4px' }}>
-            {format(summary.totalCud1yrMonthlyUSD)}
-          </div>
-          <div style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 500, marginTop: '4px' }}>
-            Economia: {format(summary.totalCud1yrSavingsUSD)}/mês (-{summary.totalCud1yrSavingsPct.toFixed(1)}%)
-          </div>
-        </div>
+interface KpiStripProps {
+  summary: CalculatorSummary;
+  potentialSavingsUSD: number;
+  currency: 'USD' | 'BRL';
+  exchangeRateBRL: number;
+}
 
-        {/* Scenario 3: 3-Year CUD */}
-        <div style={{
-          background: 'rgba(52, 211, 153, 0.1)',
-          border: '1px solid rgba(52, 211, 153, 0.3)',
-          borderLeft: '4px solid #34d399',
-          padding: '16px 20px',
-          borderRadius: 'var(--radius-md)'
-        }}>
-          <div style={{ fontSize: '0.78rem', color: '#34d399', fontWeight: 700, letterSpacing: '0.05em' }}>3. COMMIT 3 ANOS (CUD 3Y)</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#34d399', marginTop: '4px' }}>
-            {format(summary.totalCud3yrMonthlyUSD)}
-          </div>
-          <div style={{ fontSize: '0.75rem', color: '#34d399', fontWeight: 600, marginTop: '4px' }}>
-            Economia Max: {format(summary.totalCud3yrSavingsUSD)}/mês (-{summary.totalCud3yrSavingsPct.toFixed(1)}%)
-          </div>
+export const KpiStrip: React.FC<KpiStripProps> = ({ summary, potentialSavingsUSD, currency, exchangeRateBRL }) => {
+  const f = (v: number) => formatCurrency(v, currency, exchangeRateBRL);
+  return (
+    <section className="kpis" aria-label="Resumo de custos mensais">
+      <div className="kpi" style={{ ['--kpi-color' as string]: 'var(--payg)' }}>
+        <div className="kpi-label">Sob demanda</div>
+        <div className="kpi-value">{f(summary.totalPaygMonthlyUSD)}</div>
+        <div className="kpi-foot">
+          por mês · {summary.totalItems} {summary.totalItems === 1 ? 'recurso' : 'recursos'}
         </div>
       </div>
-    </header>
+      <div className="kpi" style={{ ['--kpi-color' as string]: 'var(--cud1)' }}>
+        <div className="kpi-label">Compromisso 1 ano</div>
+        <div className="kpi-value">{f(summary.totalCud1yrMonthlyUSD)}</div>
+        <div className="kpi-foot">
+          <strong>−{f(summary.totalCud1yrSavingsUSD)}</strong> ({summary.totalCud1yrSavingsPct.toFixed(0)}%) por mês
+        </div>
+      </div>
+      <div className="kpi" style={{ ['--kpi-color' as string]: 'var(--cud3)' }}>
+        <div className="kpi-label">Compromisso 3 anos</div>
+        <div className="kpi-value">{f(summary.totalCud3yrMonthlyUSD)}</div>
+        <div className="kpi-foot">
+          <strong>−{f(summary.totalCud3yrSavingsUSD)}</strong> ({summary.totalCud3yrSavingsPct.toFixed(0)}%) por mês
+        </div>
+      </div>
+      <div className="kpi" style={{ ['--kpi-color' as string]: 'var(--violet)' }}>
+        <div className="kpi-label">Otimizações Well-Architected</div>
+        <div className="kpi-value">{f(potentialSavingsUSD)}</div>
+        <div className="kpi-foot">economia potencial/mês sobre sob demanda</div>
+      </div>
+    </section>
   );
 };

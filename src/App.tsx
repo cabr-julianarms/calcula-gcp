@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Header } from './components/Header';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { Header, KpiStrip } from './components/Header';
 import { InventoryUploader } from './components/InventoryUploader';
 import { InventoryTable } from './components/InventoryTable';
 import { WellArchitectedCard } from './components/WellArchitectedCard';
@@ -7,10 +7,11 @@ import { CostDashboard } from './components/CostDashboard';
 import { PricingInspectorModal } from './components/PricingInspectorModal';
 import { ExecutiveProposalModal } from './components/ExecutiveProposalModal';
 import { EditItemModal } from './components/EditItemModal';
-import { InventoryItem, CalculatedCostItem, GCPRegion, CalculatorSummary, WellArchitectedRecommendation } from './types/gcp';
+import { InventoryItem, CalculatedCostItem, WellArchitectedRecommendation } from './types/gcp';
 import { calculateItemCost, calculateSummary } from './services/pricingEngine';
-import { generateWellArchitectedRecommendations } from './services/wellArchitectedEngine';
+import { generateWellArchitectedRecommendations, totalPotentialSavings } from './services/wellArchitectedEngine';
 import { parseCSVInventory, generateSampleCSV } from './services/inventoryParser';
+import { DEFAULT_REGION, isKnownRegion, normalizeRegion } from './data/regions';
 
 const STORAGE_KEYS = {
   INVENTORY: 'gcp_calc_inventory_v1',
@@ -19,148 +20,113 @@ const STORAGE_KEYS = {
   EXCHANGE_RATE: 'gcp_calc_rate_v1',
 };
 
+const load = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+const save = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* storage indisponível (modo privado, cota) — segue sem persistir */
+  }
+};
+
+/** Campos que, quando mudam, invalidam preços importados da planilha */
+const PRICE_AFFECTING: (keyof InventoryItem)[] = [
+  'machineType', 'region', 'vCPUs', 'ramGB', 'serviceType', 'isDatabaseWorkload', 'operatingSystem', 'usageHoursPerMonth',
+  'bootDiskType', 'bootDiskGB', 'additionalDiskType', 'additionalDiskGB', 'storageClass', 'storageGB',
+  'dbEngine', 'dbTier', 'dbStorageGB', 'highAvailability', 'networkType', 'ipCount', 'egressGB', 'quantity', 'discountType',
+];
+
+const withoutImportedPrices = (item: InventoryItem): InventoryItem => ({
+  ...item,
+  customPaygUSD: undefined,
+  customCud1yrUSD: undefined,
+  customCud3yrUSD: undefined,
+});
+
 export const App: React.FC = () => {
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.INVENTORY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      const parsed = JSON.parse(load(STORAGE_KEYS.INVENTORY) || '[]');
+      if (Array.isArray(parsed)) {
+        // migra itens antigos com regiões fora do catálogo
+        return parsed.map((i: InventoryItem) => (isKnownRegion(i.region) ? i : { ...i, region: normalizeRegion(i.region) }));
       }
-    } catch (e) {
-      console.warn('Erro ao carregar inventário do localStorage:', e);
+    } catch {
+      /* inventário corrompido — começa vazio */
     }
     return [];
   });
 
-  const [defaultRegion, setDefaultRegion] = useState<GCPRegion>(() => {
-    return (localStorage.getItem(STORAGE_KEYS.REGION) as GCPRegion) || 'southamerica-east1';
+  const [defaultRegion, setDefaultRegion] = useState<string>(() => {
+    const saved = load(STORAGE_KEYS.REGION);
+    return saved && isKnownRegion(saved) ? saved : DEFAULT_REGION;
   });
+  const [currency, setCurrency] = useState<'USD' | 'BRL'>(() => (load(STORAGE_KEYS.CURRENCY) === 'BRL' ? 'BRL' : 'USD'));
+  const [exchangeRateBRL, setExchangeRateBRL] = useState<number>(() => parseFloat(load(STORAGE_KEYS.EXCHANGE_RATE) || '') || 5.5);
 
-  const [currency, setCurrency] = useState<'USD' | 'BRL'>(() => {
-    return (localStorage.getItem(STORAGE_KEYS.CURRENCY) as 'USD' | 'BRL') || 'USD';
-  });
-
-  const [exchangeRateBRL, setExchangeRateBRL] = useState<number>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.EXCHANGE_RATE);
-    return saved ? parseFloat(saved) || 5.50 : 5.50;
-  });
-  
-  // Modals state
   const [inspectingItem, setInspectingItem] = useState<CalculatedCostItem | null>(null);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [isProposalOpen, setIsProposalOpen] = useState(false);
+  const [importerOpen, setImporterOpen] = useState(false);
 
-  // Sync to localStorage
+  useEffect(() => save(STORAGE_KEYS.INVENTORY, JSON.stringify(inventoryItems)), [inventoryItems]);
+  useEffect(() => save(STORAGE_KEYS.REGION, defaultRegion), [defaultRegion]);
+  useEffect(() => save(STORAGE_KEYS.CURRENCY, currency), [currency]);
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify(inventoryItems));
-    } catch (e) {
-      console.warn('Erro ao salvar inventário no localStorage:', e);
-    }
-  }, [inventoryItems]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.REGION, defaultRegion);
-  }, [defaultRegion]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CURRENCY, currency);
-  }, [currency]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.EXCHANGE_RATE, exchangeRateBRL.toString());
+    if (exchangeRateBRL > 0) save(STORAGE_KEYS.EXCHANGE_RATE, String(exchangeRateBRL));
   }, [exchangeRateBRL]);
 
-  // Update default region and sync existing items to the selected region
-  const handleSetDefaultRegion = (newRegion: GCPRegion) => {
-    setDefaultRegion(newRegion);
-    setInventoryItems((prev) =>
-      prev.map((item) => ({
-        ...item,
-        region: newRegion,
-        // Reset custom imported prices so region-specific pricing calculates dynamically
-        customPaygUSD: undefined,
-        customCud1yrUSD: undefined,
-        customCud3yrUSD: undefined,
-      }))
-    );
-  };
+  const calculatedItems = useMemo(() => inventoryItems.map(calculateItemCost), [inventoryItems]);
+  const recommendations = useMemo(() => generateWellArchitectedRecommendations(calculatedItems), [calculatedItems]);
+  const potentialSavings = useMemo(() => totalPotentialSavings(recommendations), [recommendations]);
+  const rate = exchangeRateBRL > 0 ? exchangeRateBRL : 5.5;
+  const summary = useMemo(() => calculateSummary(calculatedItems, currency, rate), [calculatedItems, currency, rate]);
 
-  // Re-calculate cost for every inventory item
-  const calculatedItems = useMemo(() => {
-    return inventoryItems.map((item) => calculateItemCost(item));
-  }, [inventoryItems]);
-
-  // Generate Well-Architected Framework Recommendations
-  const recommendations = useMemo(() => {
-    return generateWellArchitectedRecommendations(calculatedItems);
-  }, [calculatedItems]);
-
-  // Calculate Overall Summary Metrics
-  const summary: CalculatorSummary = useMemo(() => {
-    return calculateSummary(calculatedItems, currency, exchangeRateBRL);
-  }, [calculatedItems, currency, exchangeRateBRL]);
-
-  // Handlers
-  const handleItemsImported = (imported: InventoryItem[]) => {
-    setInventoryItems((prev) => [...imported, ...prev]);
-  };
-
-  const handleUpdateItem = (updated: InventoryItem) => {
+  const handleUpdateItem = useCallback((updated: InventoryItem) => {
     setInventoryItems((prev) =>
       prev.map((item) => {
         if (item.id !== updated.id) return item;
-        // If core specs, disk, db, or network changed, clear spreadsheet custom overrides
-        const specsChanged =
-          item.machineType !== updated.machineType ||
-          item.region !== updated.region ||
-          item.vCPUs !== updated.vCPUs ||
-          item.ramGB !== updated.ramGB ||
-          item.serviceType !== updated.serviceType ||
-          item.isDatabaseWorkload !== updated.isDatabaseWorkload ||
-          item.bootDiskType !== updated.bootDiskType ||
-          item.bootDiskGB !== updated.bootDiskGB ||
-          item.additionalDiskType !== updated.additionalDiskType ||
-          item.additionalDiskGB !== updated.additionalDiskGB ||
-          item.dbEngine !== updated.dbEngine ||
-          item.dbTier !== updated.dbTier ||
-          item.dbStorageGB !== updated.dbStorageGB ||
-          item.highAvailability !== updated.highAvailability ||
-          item.networkType !== updated.networkType ||
-          item.ipCount !== updated.ipCount ||
-          item.egressGB !== updated.egressGB;
+        if (updated.serviceType === 'other') return updated;
+        const changed = PRICE_AFFECTING.some((k) => item[k] !== updated[k]);
+        return changed ? withoutImportedPrices(updated) : updated;
+      }),
+    );
+    setInspectingItem(null);
+  }, []);
 
-        return {
-          ...updated,
-          customPaygUSD: specsChanged ? undefined : updated.customPaygUSD,
-          customCud1yrUSD: specsChanged ? undefined : updated.customCud1yrUSD,
-          customCud3yrUSD: specsChanged ? undefined : updated.customCud3yrUSD,
-        };
-      })
+  const handleApplyRecommendation = (rec: WellArchitectedRecommendation) => {
+    if (!rec.targets?.length) return;
+    const patches = new Map(rec.targets.map((t) => [t.itemId, t.patch]));
+    setInventoryItems((prev) =>
+      prev.map((item) => {
+        const patch = patches.get(item.id);
+        return patch ? withoutImportedPrices({ ...item, ...patch }) : item;
+      }),
     );
   };
 
-  const handleDeleteItem = (id: string) => {
-    setInventoryItems((prev) => prev.filter((item) => item.id !== id));
-  };
-
   const handleClearInventory = () => {
-    if (inventoryItems.length === 0) return;
-    if (window.confirm('Tem certeza que deseja limpar todo o inventário?')) {
+    if (inventoryItems.length && window.confirm(`Remover os ${inventoryItems.length} recursos do inventário?`)) {
       setInventoryItems([]);
     }
   };
 
   const handleLoadSampleData = () => {
-    const sampleItems = parseCSVInventory(generateSampleCSV(), defaultRegion);
-    setInventoryItems(sampleItems);
+    if (inventoryItems.length && !window.confirm('Substituir o inventário atual pelo exemplo?')) return;
+    setInventoryItems(parseCSVInventory(generateSampleCSV(), defaultRegion));
+    setImporterOpen(false);
   };
 
   const handleAddItem = () => {
     const newItem: InventoryItem = {
       id: `custom-${Date.now()}`,
-      name: `novo-servidor-${inventoryItems.length + 1}`,
+      name: `nova-vm-${inventoryItems.length + 1}`,
       serviceType: 'compute',
       category: 'COMPUTE',
       region: defaultRegion,
@@ -173,147 +139,77 @@ export const App: React.FC = () => {
       usageHoursPerMonth: 730,
       bootDiskGB: 50,
       bootDiskType: 'pd-balanced',
-      discountType: 'sud',
+      discountType: 'none',
     };
     setInventoryItems((prev) => [newItem, ...prev]);
+    setEditingItem(newItem);
   };
 
-  // 1-Click Application of Well-Architected Recommendations
-  const handleApplyRecommendation = (rec: WellArchitectedRecommendation) => {
-    if (!rec.itemId) return;
-
-    setInventoryItems((prev) =>
-      prev.map((item) => {
-        if (item.id !== rec.itemId) return item;
-
-        // Clear custom imported prices to ensure dynamic recalculation
-        const base = {
-          ...item,
-          customPaygUSD: undefined,
-          customCud1yrUSD: undefined,
-          customCud3yrUSD: undefined,
-        };
-
-        if (rec.actionType === 'OPTIMIZE_DISK' && rec.recommendedDiskType) {
-          return { ...base, bootDiskType: rec.recommendedDiskType };
-        }
-        if (rec.actionType === 'HA_CHECK') {
-          return { ...base, highAvailability: true };
-        }
-        if (rec.actionType === 'MIGRATE_DB_TO_MANAGED') {
-          return {
-            ...base,
-            serviceType: 'sql',
-            category: 'DATABASE',
-            isDatabaseWorkload: true,
-            dbEngine: base.dbEngine || 'MYSQL',
-            dbTier: 'db-custom-4-15360',
-            dbStorageGB: base.bootDiskGB || 100,
-            highAvailability: base.environment === 'prod',
-            gcpProductSuggested: `Cloud SQL for ${base.dbEngine || 'MySQL'}`,
-          };
-        }
-        if (rec.actionType === 'MIGRATE_DB_TO_VM') {
-          return {
-            ...base,
-            serviceType: 'compute',
-            category: 'COMPUTE',
-            isDatabaseWorkload: true,
-            machineType: 'e2-standard-4',
-            vCPUs: 4,
-            ramGB: 16,
-            bootDiskGB: base.dbStorageGB || 100,
-            bootDiskType: 'pd-balanced',
-            gcpProductSuggested: 'Compute Engine (Banco em VM)',
-          };
-        }
-        if (rec.actionType === 'APPLY_CUD_3YR') {
-          return { ...base, discountType: 'cud_3yr' };
-        }
-        if (rec.actionType === 'APPLY_CUD_1YR') {
-          return { ...base, discountType: 'cud_1yr' };
-        }
-        if (rec.actionType === 'CONVERT_SPOT') {
-          return { ...base, discountType: 'spot' };
-        }
-        if (rec.actionType === 'MODERNIZE_MACHINE' && rec.recommendedMachineType) {
-          return { ...base, machineType: rec.recommendedMachineType };
-        }
-        if (rec.actionType === 'STORAGE_LIFECYCLE' && rec.recommendedStorageClass) {
-          return { ...base, storageClass: rec.recommendedStorageClass };
-        }
-        return base;
-      })
-    );
+  const handleApplyRegionToAll = () => {
+    if (!window.confirm(`Mover todos os ${inventoryItems.length} recursos para ${defaultRegion}? Preços importados serão recalculados pelo motor.`)) return;
+    setInventoryItems((prev) => prev.map((i) => withoutImportedPrices({ ...i, region: defaultRegion })));
   };
 
   return (
-    <div style={{ maxWidth: '1600px', width: '100%', margin: '0 auto', padding: '24px 16px', boxSizing: 'border-box' }}>
-      
-      {/* Top Header & Summary */}
+    <div className="app">
       <Header
         defaultRegion={defaultRegion}
-        setDefaultRegion={handleSetDefaultRegion}
+        setDefaultRegion={setDefaultRegion}
+        onApplyRegionToAll={handleApplyRegionToAll}
         currency={currency}
         setCurrency={setCurrency}
         exchangeRateBRL={exchangeRateBRL}
         setExchangeRateBRL={setExchangeRateBRL}
-        summary={summary}
+        itemCount={inventoryItems.length}
         onOpenProposal={() => setIsProposalOpen(true)}
         onClearInventory={handleClearInventory}
         onLoadSampleData={handleLoadSampleData}
       />
 
-      {/* Inventory File Drop / Paste Zone */}
-      <InventoryUploader onItemsImported={handleItemsImported} defaultRegion={defaultRegion} />
+      <KpiStrip summary={summary} potentialSavingsUSD={potentialSavings} currency={currency} exchangeRateBRL={rate} />
 
-      {/* Interactive Inventory Table */}
       <InventoryTable
         calculatedItems={calculatedItems}
         onUpdateItem={handleUpdateItem}
-        onDeleteItem={handleDeleteItem}
+        onDeleteItem={(id) => setInventoryItems((prev) => prev.filter((i) => i.id !== id))}
         onAddItem={handleAddItem}
         onEditItem={setEditingItem}
-        onInspectPrice={(calcItem) => setInspectingItem(calcItem)}
+        onInspectPrice={setInspectingItem}
+        onLoadSample={handleLoadSampleData}
+        importerOpen={importerOpen}
+        setImporterOpen={setImporterOpen}
+        importer={
+          <InventoryUploader
+            defaultRegion={defaultRegion}
+            onItemsImported={(imported) => setInventoryItems((prev) => [...imported, ...prev])}
+          />
+        }
         currency={currency}
-        exchangeRateBRL={exchangeRateBRL}
+        exchangeRateBRL={rate}
       />
 
-      {/* Visual Cost Dashboard */}
-      <CostDashboard
-        calculatedItems={calculatedItems}
-        summary={summary}
-        currency={currency}
-        exchangeRateBRL={exchangeRateBRL}
-      />
-
-      {/* Well-Architected Framework Recommendations */}
       <WellArchitectedCard
         recommendations={recommendations}
         onApplyRecommendation={handleApplyRecommendation}
         currency={currency}
-        exchangeRateBRL={exchangeRateBRL}
+        exchangeRateBRL={rate}
+        hasItems={inventoryItems.length > 0}
       />
 
-      {/* Edit Item Modal */}
-      {editingItem && (
-        <EditItemModal
-          item={editingItem}
-          isOpen={!!editingItem}
-          onClose={() => setEditingItem(null)}
-          onSave={handleUpdateItem}
-        />
+      <CostDashboard calculatedItems={calculatedItems} summary={summary} currency={currency} exchangeRateBRL={rate} />
+
+      <footer className="footer">
+        Estimativas com preços de lista públicos do Google Cloud (on-demand, sem impostos nem descontos negociados), ajustados por índice regional.
+        <br />
+        Valide valores finais na <a href="https://cloud.google.com/products/calculator" target="_blank" rel="noreferrer">calculadora oficial</a>. 🌱 indica regiões com selo Low CO₂.
+      </footer>
+
+      {editingItem && <EditItemModal item={editingItem} onClose={() => setEditingItem(null)} onSave={handleUpdateItem} />}
+
+      {inspectingItem && (
+        <PricingInspectorModal calculatedItem={inspectingItem} onClose={() => setInspectingItem(null)} currency={currency} exchangeRateBRL={rate} />
       )}
 
-      {/* Pricing Formula & SKU Inspector Modal */}
-      <PricingInspectorModal
-        calculatedItem={inspectingItem}
-        onClose={() => setInspectingItem(null)}
-        currency={currency}
-        exchangeRateBRL={exchangeRateBRL}
-      />
-
-      {/* Executive Proposal Modal */}
       {isProposalOpen && (
         <ExecutiveProposalModal
           calculatedItems={calculatedItems}
@@ -321,7 +217,7 @@ export const App: React.FC = () => {
           recommendations={recommendations}
           onClose={() => setIsProposalOpen(false)}
           currency={currency}
-          exchangeRateBRL={exchangeRateBRL}
+          exchangeRateBRL={rate}
         />
       )}
     </div>

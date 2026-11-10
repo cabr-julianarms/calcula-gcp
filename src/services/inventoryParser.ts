@@ -1,8 +1,9 @@
 import Papa from 'papaparse';
 import yaml from 'js-yaml';
-import { InventoryItem, GCPServiceType, GCPRegion, OperatingSystem, DiscountType, GCPResourceCategory } from '../types/gcp';
+import { InventoryItem, GCPServiceType, GCPRegion, OperatingSystem, GCPResourceCategory } from '../types/gcp';
+import { normalizeRegion, DEFAULT_REGION } from '../data/regions';
 
-export function parseCSVInventory(csvContent: string, defaultRegion: GCPRegion = 'us-central1'): InventoryItem[] {
+export function parseCSVInventory(csvContent: string, defaultRegion: GCPRegion = DEFAULT_REGION): InventoryItem[] {
   const parsed = Papa.parse<Record<string, string>>(csvContent, {
     header: true,
     skipEmptyLines: true,
@@ -25,14 +26,15 @@ export function parseCSVInventory(csvContent: string, defaultRegion: GCPRegion =
 
     let originalName = row['Nome do Recurso Original'] || row['Item'] || row['name'] || row['server_name'] || row['hostname'] || row['resource_name'] || `Item-${index + 1}`;
     
-    // If from Jelastic / Virtuozzo report where Env and Item are separate
-    if (envRaw && originalName && envRaw !== originalName) {
+    // Jelastic / Virtuozzo report: "Env" holds the environment name, "Item" the node
+    const jelasticEnv = row['Env'] || '';
+    if (jelasticEnv && originalName && jelasticEnv !== originalName) {
       if (cleanNodeType.toLowerCase().startsWith('ipv4') || cleanNodeType.toLowerCase().startsWith('ipv6')) {
-        originalName = `${envRaw} - ${originalName} (${cleanNodeType})`;
+        originalName = `${jelasticEnv} - ${originalName} (${cleanNodeType})`;
       } else if (cleanNodeType.toLowerCase() === 'ssl') {
-        originalName = `${envRaw} - Certificado SSL`;
+        originalName = `${jelasticEnv} - Certificado SSL`;
       } else {
-        originalName = `${envRaw} - ${originalName}`;
+        originalName = `${jelasticEnv} - ${originalName}`;
       }
     }
 
@@ -83,7 +85,7 @@ export function parseCSVInventory(csvContent: string, defaultRegion: GCPRegion =
           ? Math.max(20, Math.round(paidStorageMB / (720 * 1024)))
           : Math.max(20, Math.round(paidStorageMB / 1024));
       } else {
-        bootDiskGB = (category === 'COMPUTE' || serviceType === 'compute' || serviceType === 'gke') ? 50 : 0;
+        bootDiskGB = (serviceType === 'compute' || serviceType === 'gke' || serviceType === 'disk') ? 50 : 0;
       }
     }
 
@@ -97,16 +99,16 @@ export function parseCSVInventory(csvContent: string, defaultRegion: GCPRegion =
     if (category === 'NETWORK' || serviceType === 'network' || cleanNodeType.toLowerCase().startsWith('ipv4') || cleanNodeType.toLowerCase().startsWith('ipv6')) {
       if (cleanNodeType.toLowerCase().startsWith('ipv4') || cleanNodeType.toLowerCase().startsWith('ipv6') || /\b(ip|ips|ipv4|ipv6)\b|public ip|ip address/.test(fullText)) {
         networkType = 'ip';
-        ipCount = parseInt(row['ip_count'] || row['ips'] || row['quantity'] || '1', 10) || 1;
+        ipCount = parseInt(row['ip_count'] || row['ips'] || '1', 10) || 1;
         unitCostUSD = 3.65;
         if (!gcpProductSuggested) gcpProductSuggested = 'VPC External IP';
         if (!skuDetails) skuDetails = `${ipCount} Endereço IPv4 Público Estático`;
         if (!technicalNotes) technicalNotes = 'IP Público Externo detectado no consumo';
-      } else if (fullText.includes('nat') || fullText.includes('gateway')) {
+      } else if (/\bnat\b|gateway/.test(fullText)) {
         networkType = 'nat';
         if (!gcpProductSuggested) gcpProductSuggested = 'Cloud NAT';
         if (!skuDetails) skuDetails = 'Cloud NAT Gateway + Processamento';
-      } else if (fullText.includes('load balancer') || fullText.includes('balanceador') || fullText.includes('alb')) {
+      } else if (/load balancer|balanceador|\balb\b|\belb\b/.test(fullText)) {
         networkType = 'load_balancer';
         if (!gcpProductSuggested) gcpProductSuggested = 'Cloud Load Balancing';
         if (!skuDetails) skuDetails = 'Forwarding Rules + Tráfego';
@@ -153,7 +155,7 @@ export function parseCSVInventory(csvContent: string, defaultRegion: GCPRegion =
       operatingSystem: os,
       usageHoursPerMonth: 730,
       bootDiskGB,
-      bootDiskType: normalizeDiskType(skuDetails || row['boot_disk_type']),
+      bootDiskType: normalizeDiskType(row['boot_disk_type'] || (/^(pd-|hyperdisk)/i.test(skuDetails) ? skuDetails : '')),
       additionalDiskGB: parseFloat(row['additional_disk_gb'] || '0'),
       additionalDiskType: normalizeDiskType(row['additional_disk_type']),
       storageClass: normalizeStorageClass(row['storage_class']),
@@ -211,7 +213,8 @@ function detectCategoryAndService(
   // 1. Explicit Category first
   if (c.includes('COMPUTE')) return { category: 'COMPUTE', serviceType: 'compute' };
   if (c.includes('DATABASE') || c.includes('DB')) return { category: 'DATABASE', serviceType: 'sql' };
-  if (c.includes('STORAGE')) return { category: 'STORAGE', serviceType: 'disk' };
+  const looksLikeBucket = /bucket|gcs|\bs3\b|object storage|blob/.test(n);
+  if (c.includes('STORAGE')) return { category: 'STORAGE', serviceType: looksLikeBucket ? 'storage' : 'disk' };
   if (c.includes('NETWORK') || c.includes('REDE')) return { category: 'NETWORK', serviceType: 'network' };
   if (c.includes('CDN')) return { category: 'CDN', serviceType: 'network' };
   if (c.includes('OBSERVABILITY')) return { category: 'OBSERVABILITY', serviceType: 'other' };
@@ -230,27 +233,28 @@ function detectCategoryAndService(
   if (/\b(ip|ips|ipv4|ipv6)\b|public ip|ip address/.test(t) || /\b(ip|ips|ipv4|ipv6)\b|public ip|ip address/.test(n)) {
     return { category: 'NETWORK', serviceType: 'network' };
   }
-  if (n.includes('nat') || n.includes('gateway') || n.includes('load balancer') || n.includes('balanceador') || n.includes('traffic') || n.includes('egress') || n.includes('vpn')) {
+  if (/\bnat\b/.test(n) || n.includes('gateway') || n.includes('load balancer') || n.includes('balanceador') || n.includes('traffic') || n.includes('egress') || n.includes('vpn')) {
     return { category: 'NETWORK', serviceType: 'network' };
   }
   if (n.includes('mariadb') || n.includes('mysql') || n.includes('postgres') || n.includes('rds') || n.includes('sql') || n.includes('oracle')) {
     return { category: 'DATABASE', serviceType: 'sql' };
   }
-  if (n.includes('storage') || n.includes('ebs') || n.includes('disk') || n.includes('pd-') || n.includes('bucket')) {
+  if (looksLikeBucket) return { category: 'STORAGE', serviceType: 'storage' };
+  if (n.includes('storage') || n.includes('ebs') || n.includes('disk') || n.includes('pd-')) {
     return { category: 'STORAGE', serviceType: 'disk' };
   }
 
   return { category: 'COMPUTE', serviceType: 'compute' };
 }
 
-export function parseJSONInventory(jsonContent: string, defaultRegion: GCPRegion = 'us-central1'): InventoryItem[] {
+export function parseJSONInventory(jsonContent: string, defaultRegion: GCPRegion = DEFAULT_REGION): InventoryItem[] {
   try {
     const raw = JSON.parse(jsonContent);
     const array = Array.isArray(raw) ? raw : [raw];
 
     return array.map((row: any, index: number) => {
       if (row.assetType || (typeof row.name === 'string' && row.name.startsWith('//'))) {
-        return parseGCPAssetItem(row, index);
+        return parseGCPAssetItem(row, index, defaultRegion);
       }
 
       const categoryRaw = row['Categoria'] || row['category'] || '';
@@ -291,12 +295,12 @@ export function parseJSONInventory(jsonContent: string, defaultRegion: GCPRegion
       if (category === 'NETWORK' || serviceType === 'network') {
         if (/\b(ip|ips|ipv4|ipv6)\b|public ip|ip address/.test(fullText)) {
           networkType = 'ip';
-          ipCount = parseInt(row['ip_count'] || row['ips'] || row['quantity'] || '1', 10) || 1;
+          ipCount = parseInt(row['ip_count'] || row['ips'] || '1', 10) || 1;
           if (paygRaw === 0) unitCostUSD = 3.65;
-        } else if (fullText.includes('nat') || fullText.includes('gateway')) {
+        } else if (/\bnat\b|gateway/.test(fullText)) {
           networkType = 'nat';
           egressGB = isNaN(rawUsage) ? 0 : rawUsage;
-        } else if (fullText.includes('load balancer') || fullText.includes('balanceador') || fullText.includes('alb')) {
+        } else if (/load balancer|balanceador|\balb\b|\belb\b/.test(fullText)) {
           networkType = 'load_balancer';
           egressGB = isNaN(rawUsage) ? 0 : rawUsage;
         } else if (fullText.includes('vpn') || fullText.includes('tunnel')) {
@@ -327,7 +331,7 @@ export function parseJSONInventory(jsonContent: string, defaultRegion: GCPRegion
         operatingSystem: os,
         usageHoursPerMonth: row.usageHoursPerMonth || 730,
         bootDiskGB: isNaN(bootDiskGB) ? (isComputeLike ? 50 : 0) : bootDiskGB,
-        bootDiskType: normalizeDiskType(row.bootDiskType || skuDetails),
+        bootDiskType: normalizeDiskType(row.bootDiskType || row.boot_disk_type || (/^(pd-|hyperdisk)/i.test(skuDetails) ? skuDetails : '')),
         additionalDiskGB: parseFloat(row.additionalDiskGB || row.additional_disk_gb || '0'),
         additionalDiskType: normalizeDiskType(row.additionalDiskType || row.additional_disk_type),
         storageClass: normalizeStorageClass(row.storageClass || row.storage_class),
@@ -354,7 +358,7 @@ export function parseJSONInventory(jsonContent: string, defaultRegion: GCPRegion
   }
 }
 
-function parseGCPAssetItem(asset: any, index: number): InventoryItem {
+function parseGCPAssetItem(asset: any, index: number, defaultRegion: GCPRegion): InventoryItem {
   const assetName = asset.displayName || asset.name?.split('/').pop() || `GCP-Asset-${index + 1}`;
   const assetType = asset.assetType || asset.resourceType || '';
   let serviceType: GCPServiceType = 'compute';
@@ -366,7 +370,7 @@ function parseGCPAssetItem(asset: any, index: number): InventoryItem {
   else if (assetType.includes('container.googleapis.com/Cluster')) { serviceType = 'gke'; category = 'COMPUTE'; }
   else if (assetType.includes('Address')) { serviceType = 'network'; category = 'NETWORK'; }
 
-  const location = asset.location || 'us-central1';
+  const location = asset.location || defaultRegion;
 
   return {
     id: `gcp-asset-${Date.now()}-${index}`,
@@ -377,7 +381,7 @@ function parseGCPAssetItem(asset: any, index: number): InventoryItem {
     gcpProductSuggested: category === 'COMPUTE' ? 'Compute Engine' : 'GCP Asset',
     skuDetails: asset.machineType || 'e2-standard-4',
     technicalNotes: `Importado de GCP Cloud Asset Export (${assetType})`,
-    region: normalizeRegion(location),
+    region: normalizeRegion(location, defaultRegion),
     quantity: 1,
     environment: 'prod',
     machineType: asset.machineType || 'e2-standard-4',
@@ -392,7 +396,7 @@ function parseGCPAssetItem(asset: any, index: number): InventoryItem {
   };
 }
 
-export function parseYAMLInventory(yamlContent: string, defaultRegion: GCPRegion = 'us-central1'): InventoryItem[] {
+export function parseYAMLInventory(yamlContent: string, defaultRegion: GCPRegion = DEFAULT_REGION): InventoryItem[] {
   try {
     const raw = yaml.load(yamlContent);
     const jsonString = JSON.stringify(raw);
@@ -403,7 +407,7 @@ export function parseYAMLInventory(yamlContent: string, defaultRegion: GCPRegion
   }
 }
 
-export function parseTerraformHCL(hclContent: string): InventoryItem[] {
+export function parseTerraformHCL(hclContent: string, defaultRegion: GCPRegion = DEFAULT_REGION): InventoryItem[] {
   const items: InventoryItem[] = [];
   const instanceMatches = hclContent.matchAll(/resource\s+"google_compute_instance"\s+"([^"]+)"\s*\{([^}]+)\}/g);
 
@@ -416,8 +420,7 @@ export function parseTerraformHCL(hclContent: string): InventoryItem[] {
     const zoneMatch = body.match(/zone\s*=\s*"([^"]+)"/);
     
     const machineType = machineMatch ? machineMatch[1] : 'e2-standard-2';
-    const zone = zoneMatch ? zoneMatch[1] : 'us-central1-a';
-    const region = normalizeRegion(zone.split('-').slice(0, 2).join('-'));
+    const region = zoneMatch ? normalizeRegion(zoneMatch[1], defaultRegion) : defaultRegion;
 
     items.push({
       id: `tf-inst-${Date.now()}-${index++}`,
@@ -447,18 +450,6 @@ export function parseTerraformHCL(hclContent: string): InventoryItem[] {
 }
 
 // Normalizer Helpers
-function normalizeRegion(val?: string, defaultRegion: GCPRegion = 'us-central1'): GCPRegion {
-  const r = (val || '').toLowerCase().trim();
-  if (!r || r === 'não informado' || r === 'nao informado' || r === 'n/a' || r === 'global' || r === 'none') {
-    return defaultRegion;
-  }
-  if (r.includes('southamerica') || r.includes('sao-paulo') || r.includes('são paulo') || r.includes('sa-east') || r.includes('br')) return 'southamerica-east1';
-  if (r.includes('us-east')) return 'us-east1';
-  if (r.includes('europe') || r.includes('belgium')) return 'europe-west1';
-  if (r.includes('us-central')) return 'us-central1';
-  return defaultRegion;
-}
-
 function normalizeOS(val?: string): OperatingSystem {
   const os = (val || '').toLowerCase();
   if (os.includes('rhel') || os.includes('redhat')) return 'rhel';
@@ -500,12 +491,18 @@ function normalizeDBEngine(val?: string): 'MYSQL' | 'POSTGRES' | 'SQLSERVER' {
 
 // Sample Templates Download Generators
 export function generateSampleCSV(): string {
-  return `Categoria,Nome do Recurso Original,vCPU,RAM (GB),OS,Região,Uso (Usage),Custo do Recurso Original,Produto GCP Sugerido,SKU/Machine Type GCP,Região GCP,Notas Técnicas,Monthly Cost No Commit,Monthly Cost 1y Commit,Monthly Cost 3y Commit
-COMPUTE,Amazon EC2 t3a.micro,2,1,Linux,us-east-1,730.000,$4.54,Compute Engine,e2-micro,us-east1,Equivalência 2 vCPU/1 GB shared-core,$4.04,$2.91,$2.18
-COMPUTE,Servidor GLPI Debian,2,8,Linux,não informado,720.000,$16.77,Compute Engine,e2-standard-2,southamerica-east1,Dimensionado no shape padrão e2-standard-2,$76.59,$44.70,$33.53
-DATABASE,Jelastic mariadb-dockerized GLPI,2,8,Linux,não informado,720.000,$16.16,Cloud SQL for MySQL,db-custom-2-8192,southamerica-east1,Cloud SQL MySQL 2 vCPU 8GB RAM,$131.40,$98.55,$63.07
-NETWORK,AWS VPC in-use public IPv4,,,,,730.000,$3.69,VPC,External IPv4 address in use,us-east1,1 IP Público Ativo,$3.69,$3.69,$3.69
-STORAGE,Jelastic paid storage GLPI,,,,,41.624,$4.16,Persistent Disk,pd-balanced,southamerica-east1,Disco balanceado 41.6 GB,$4.16,$4.16,$4.16`;
+  return `category,name,environment,machine_type,os,region,boot_disk_gb,boot_disk_type,additional_disk_gb,storage_gb,storage_class,quantity,Notas Técnicas
+COMPUTE,web-frontend,prod,n1-standard-4,Linux,sa-east-1,50,pd-standard,,,,1,Servidor web legado migrado de EC2
+COMPUTE,api-backend,prod,e2-standard-4,Linux,southamerica-east1,50,pd-balanced,200,,,2,Cluster de API atrás do balanceador
+COMPUTE,postgres-erp,prod,n2-highmem-4,Linux,southamerica-east1,100,pd-ssd,500,,,1,PostgreSQL auto-gerenciado em VM
+DATABASE,mysql-portal,prod,db-custom-2-8192,,southamerica-east1,100,,,,,1,Cloud SQL MySQL
+COMPUTE,app-homolog,staging,e2-standard-2,Linux,southamerica-east1,50,pd-balanced,,,,1,Homologação
+COMPUTE,jenkins-dev,dev,n2-standard-8,Linux,us-east1,200,pd-ssd,,,,1,Runner de CI
+COMPUTE,windows-ad,prod,e2-medium,Windows,southamerica-east1,60,pd-balanced,,,,1,Controlador de domínio
+STORAGE,bucket-backups,prod,,,southamerica-east1,,,,2000,standard,1,Backups diários
+NETWORK,IP público web,prod,,,southamerica-east1,,,,,,2,IPs estáticos dos servidores web
+NETWORK,load balancer https,prod,,,southamerica-east1,,,,,,1,Balanceador HTTPS externo
+NETWORK,VPN matriz,prod,,,southamerica-east1,,,,,,1,Túnel para o datacenter`;
 }
 
 export function generateSampleJSON(): string {

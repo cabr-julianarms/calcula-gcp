@@ -1,140 +1,119 @@
-import React from 'react';
-import { Sparkles, ArrowRight, CheckCircle, TrendingDown } from 'lucide-react';
-import { WellArchitectedRecommendation } from '../types/gcp';
-import { formatCurrency } from '../utils/formatters';
+import React, { useState } from 'react';
+import { Compass, Check, ExternalLink } from 'lucide-react';
+import { WafPillar, WellArchitectedRecommendation } from '../types/gcp';
+import { formatDelta } from '../utils/formatters';
+import { PILLARS, PILLAR_ORDER } from '../services/wellArchitectedEngine';
 
 interface WellArchitectedCardProps {
   recommendations: WellArchitectedRecommendation[];
   onApplyRecommendation: (rec: WellArchitectedRecommendation) => void;
   currency: 'USD' | 'BRL';
   exchangeRateBRL: number;
+  hasItems: boolean;
 }
 
-export const WellArchitectedCard: React.FC<WellArchitectedCardProps> = ({
-  recommendations,
-  onApplyRecommendation,
-  currency,
-  exchangeRateBRL,
-}) => {
-  const format = (amountUSD: number) => formatCurrency(amountUSD, currency, exchangeRateBRL);
+const IMPACT: Record<string, { label: string; cls: string }> = {
+  HIGH: { label: 'Impacto alto', cls: 'chip-red' },
+  MEDIUM: { label: 'Impacto médio', cls: 'chip-amber' },
+  LOW: { label: 'Impacto baixo', cls: 'chip-blue' },
+};
 
-  const totalPotentialSavingsUSD = recommendations.reduce((acc, r) => acc + r.potentialMonthlySavingsUSD, 0);
+const IMPACT_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
 
-  if (recommendations.length === 0) {
-    return (
-      <div className="glass-panel" style={{ padding: '20px', marginBottom: '24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#34d399' }}>
-          <CheckCircle style={{ width: '20px', height: '20px' }} />
-          <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>Well-Architected Framework: Inventário Otimizado!</h3>
-        </div>
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-          Nenhuma oportunidade adicional de redução de custos foi identificada. Seus recursos estão alinhados às melhores práticas da GCP.
-        </p>
-      </div>
-    );
-  }
+export const WellArchitectedCard: React.FC<WellArchitectedCardProps> = ({ recommendations, onApplyRecommendation, currency, exchangeRateBRL, hasItems }) => {
+  const [pillar, setPillar] = useState<WafPillar | 'all'>('all');
+  if (!hasItems) return null;
+
+  const counts = Object.fromEntries(PILLAR_ORDER.map((p) => [p, recommendations.filter((r) => r.pillar === p).length])) as Record<WafPillar, number>;
+  const visible = recommendations
+    .filter((r) => pillar === 'all' || r.pillar === pillar)
+    .sort((a, b) => IMPACT_ORDER[a.impact] - IMPACT_ORDER[b.impact] || a.monthlyDeltaUSD - b.monthlyDeltaUSD);
 
   return (
-    <div className="glass-panel" style={{ padding: '24px', marginBottom: '28px' }}>
-      
-      {/* Panel Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            background: 'rgba(139, 92, 246, 0.2)',
-            padding: '10px',
-            borderRadius: '12px',
-            color: '#c084fc'
-          }}>
-            <Sparkles style={{ width: '22px', height: '22px' }} />
-          </div>
-          <div>
-            <h3 style={{ fontSize: '1.2rem', fontWeight: 700 }}>Recomendações GCP Well-Architected Framework</h3>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              Otimizações de confiabilidade (HA), modernização e mitigação de desperdício
-            </p>
-          </div>
-        </div>
-
-        {/* Total Savings Highlight */}
-        <div className="badge badge-green" style={{ padding: '8px 16px', fontSize: '0.88rem' }}>
-          <TrendingDown style={{ width: '15px', height: '15px' }} /> Economia Potencial: {format(totalPotentialSavingsUSD)}/mês
+    <section className="panel" aria-labelledby="waf-title">
+      <div className="panel-head">
+        <div>
+          <h2 className="panel-title" id="waf-title">
+            <Compass size={18} style={{ color: 'var(--violet)' }} /> Revisão Well-Architected
+          </h2>
+          <p className="panel-sub">
+            Achados do inventário mapeados aos 6 pilares do{' '}
+            <a href="https://cloud.google.com/architecture/framework" target="_blank" rel="noreferrer">Google Cloud Well-Architected Framework</a>.
+            Variações calculadas pelo mesmo motor de preços da tabela.
+          </p>
         </div>
       </div>
 
-      {/* List of Recommendations */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '20px' }}>
-        {recommendations.map((rec) => (
-          <div
-            key={rec.id}
-            style={{
-              background: 'rgba(15, 23, 42, 0.6)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-md)',
-              padding: '16px',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              gap: '12px',
-              transition: 'var(--transition)',
-            }}
+      <div className="pillar-summary">
+        {PILLAR_ORDER.map((p) => (
+          <button
+            key={p}
+            className="pillar-stat"
+            style={{ ['--pillar' as string]: PILLARS[p].color }}
+            aria-pressed={pillar === p}
+            onClick={() => setPillar(pillar === p ? 'all' : p)}
           >
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span className={`badge ${rec.impact === 'HIGH' ? 'badge-amber' : 'badge-blue'}`}>
-                    {rec.impact}
-                  </span>
-                  {rec.pillar && (
-                    <span style={{
-                      fontSize: '0.68rem',
-                      fontWeight: 600,
-                      padding: '2px 8px',
-                      borderRadius: '10px',
-                      background: 'rgba(99, 102, 241, 0.15)',
-                      color: '#a5b4fc',
-                      border: '1px solid rgba(99, 102, 241, 0.3)'
-                    }}>
-                      {rec.pillar}
-                    </span>
-                  )}
-                </div>
-
-                {rec.potentialMonthlySavingsUSD > 0 ? (
-                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399' }}>
-                    -{format(rec.potentialMonthlySavingsUSD)}/mês
-                  </span>
-                ) : (
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#60a5fa' }}>
-                    {rec.actionType === 'HA_CHECK' ? 'SLA 99.95% Multi-Zona' : 'Desempenho / I/O'}
-                  </span>
-                )}
-              </div>
-
-              <h4 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '6px' }}>{rec.title}</h4>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-                {rec.description}
-              </p>
-            </div>
-
-            {/* Apply Button */}
-            <button
-              className="btn btn-secondary"
-              onClick={() => onApplyRecommendation(rec)}
-              style={{
-                fontSize: '0.8rem',
-                justifyContent: 'space-between',
-                borderColor: 'rgba(139, 92, 246, 0.4)',
-                color: '#c084fc',
-                cursor: 'pointer',
-              }}
-            >
-              <span>Aplicar Otimização</span>
-              <ArrowRight style={{ width: '14px', height: '14px' }} />
-            </button>
-          </div>
+            <div className="n">{counts[p]}</div>
+            <div className="l">{PILLARS[p].label}</div>
+          </button>
         ))}
       </div>
-    </div>
+
+      <div className="tabs" role="tablist" aria-label="Filtrar por pilar">
+        <button role="tab" className="tab" aria-selected={pillar === 'all'} onClick={() => setPillar('all')}>
+          Todos <span className="count">{recommendations.length}</span>
+        </button>
+        {PILLAR_ORDER.filter((p) => counts[p] > 0).map((p) => (
+          <button key={p} role="tab" className="tab" aria-selected={pillar === p} onClick={() => setPillar(p)}>
+            <span className="dot" style={{ background: PILLARS[p].color }} />
+            {PILLARS[p].short} <span className="count">{counts[p]}</span>
+          </button>
+        ))}
+      </div>
+
+      {visible.length === 0 ? (
+        <div className="notice notice-success" style={{ marginTop: 0 }}>
+          <Check /> Nenhum achado neste pilar para o inventário atual.
+        </div>
+      ) : (
+        <div className="rec-grid">
+          {visible.map((rec) => {
+            const meta = PILLARS[rec.pillar];
+            const delta = rec.monthlyDeltaUSD;
+            const deltaCls = Math.abs(delta) < 0.005 ? 'none' : delta < 0 ? 'save' : 'cost';
+            return (
+              <article key={rec.id} className="rec" style={{ ['--pillar' as string]: meta.color }}>
+                <div className="rec-top">
+                  <div className="rec-tags">
+                    <span className="chip" style={{ ['--chip-fg' as string]: meta.color }}>{meta.short}</span>
+                    <span className={`chip ${IMPACT[rec.impact].cls}`}>{IMPACT[rec.impact].label}</span>
+                  </div>
+                </div>
+                <h4>{rec.title}</h4>
+                <p>{rec.description}</p>
+                <div className="practice">
+                  {rec.practice}{' '}
+                  <a href={meta.url} target="_blank" rel="noreferrer" aria-label={`Abrir pilar ${meta.label}`}>
+                    <ExternalLink size={11} style={{ verticalAlign: '-1px' }} />
+                  </a>
+                </div>
+                <div className="rec-foot">
+                  <span className={`delta ${deltaCls}`} title={delta > 0 ? 'Investimento adicional por mês' : delta < 0 ? 'Economia por mês' : undefined}>
+                    {deltaCls === 'none'
+                      ? 'Sem impacto direto de custo'
+                      : `${rec.deltaIsEstimate ? '≈ ' : ''}${formatDelta(delta, currency, exchangeRateBRL)}/mês`}
+                  </span>
+                  {rec.targets && rec.targets.length > 0 && (
+                    <button className="btn btn-sm" onClick={() => onApplyRecommendation(rec)}>
+                      {rec.applyLabel || 'Aplicar'}
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 };

@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import {
-  Search, Plus, Trash2, ShieldCheck, Cpu, HardDrive, Database, Server, Filter, Globe, Network, Edit3
-} from 'lucide-react';
-import { InventoryItem, CalculatedCostItem, GCPResourceCategory, GCPRegion, DiskType } from '../types/gcp';
-import { GCP_REGION_LABELS } from '../data/gcpPricingCatalog';
+import { Search, Plus, Trash2, Pencil, Calculator, ShieldCheck, Upload, PackageOpen, FlaskConical } from 'lucide-react';
+import { InventoryItem, CalculatedCostItem, DiskType, Environment } from '../types/gcp';
 import { formatCurrency } from '../utils/formatters';
+import { getMachineSpec, parseSqlTier, DISK_LABELS } from '../data/gcpPricingCatalog';
+import { engineName } from '../services/pricingEngine';
+import { RegionSelect, CategoryChip, CATEGORY_LABELS } from './ui';
 
 interface InventoryTableProps {
   calculatedItems: CalculatedCostItem[];
@@ -13,9 +13,20 @@ interface InventoryTableProps {
   onAddItem: () => void;
   onEditItem: (item: InventoryItem) => void;
   onInspectPrice: (calculatedItem: CalculatedCostItem) => void;
+  onLoadSample: () => void;
+  importer: React.ReactNode;
+  importerOpen: boolean;
+  setImporterOpen: (open: boolean) => void;
   currency: 'USD' | 'BRL';
   exchangeRateBRL: number;
 }
+
+const ENV_OPTIONS: { value: Environment; label: string }[] = [
+  { value: 'prod', label: 'PROD' },
+  { value: 'staging', label: 'STG' },
+  { value: 'dev', label: 'DEV' },
+  { value: 'qa', label: 'QA' },
+];
 
 export const InventoryTable: React.FC<InventoryTableProps> = ({
   calculatedItems,
@@ -24,516 +35,330 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
   onAddItem,
   onEditItem,
   onInspectPrice,
+  onLoadSample,
+  importer,
+  importerOpen,
+  setImporterOpen,
   currency,
   exchangeRateBRL,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const f = (v: number) => formatCurrency(v, currency, exchangeRateBRL);
 
-  const formatCost = (amountUSD: number) => {
-    return formatCurrency(amountUSD, currency, exchangeRateBRL);
-  };
-
-  const filteredItems = calculatedItems.filter((calc) => {
-    const { item, originalResourceName, gcpProductSuggested, skuDetails } = calc;
-    const matchesSearch = 
-      originalResourceName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      gcpProductSuggested.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      skuDetails.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.name.toLowerCase().includes(searchTerm.toLowerCase());
-      
-    const matchesCategory = categoryFilter === 'all' || calc.category === categoryFilter;
-    return matchesSearch && matchesCategory;
+  const categories = Array.from(new Set(calculatedItems.map((c) => c.category)));
+  const q = searchTerm.trim().toLowerCase();
+  const filtered = calculatedItems.filter((c) => {
+    const hay = `${c.originalResourceName} ${c.gcpProductSuggested} ${c.skuDetails} ${c.item.region} ${c.technicalNotes}`.toLowerCase();
+    return (!q || hay.includes(q)) && (categoryFilter === 'all' || c.category === categoryFilter);
   });
 
-  const getCategoryBadgeStyle = (cat: GCPResourceCategory) => {
-    switch (cat) {
-      case 'COMPUTE':
-        return { bg: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.3)', color: '#60a5fa', icon: <Server style={{ width: '13px', height: '13px' }} /> };
-      case 'DATABASE':
-        return { bg: 'rgba(168, 85, 247, 0.15)', border: 'rgba(168, 85, 247, 0.3)', color: '#c084fc', icon: <Database style={{ width: '13px', height: '13px' }} /> };
-      case 'STORAGE':
-        return { bg: 'rgba(234, 179, 8, 0.15)', border: 'rgba(234, 179, 8, 0.3)', color: '#facc15', icon: <HardDrive style={{ width: '13px', height: '13px' }} /> };
-      case 'NETWORK':
-      case 'CDN':
-        return { bg: 'rgba(20, 184, 166, 0.15)', border: 'rgba(20, 184, 166, 0.3)', color: '#2dd4bf', icon: <Network style={{ width: '13px', height: '13px' }} /> };
-      default:
-        return { bg: 'rgba(107, 114, 128, 0.15)', border: 'rgba(107, 114, 128, 0.3)', color: '#9ca3af', icon: <Cpu style={{ width: '13px', height: '13px' }} /> };
-    }
-  };
+  const isEmpty = calculatedItems.length === 0;
 
   return (
-    <div className="glass-panel" style={{ padding: '24px', marginBottom: '28px' }}>
-      
-      {/* Table Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
-        
-        {/* Search Input */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: '320px', flex: '1', maxWidth: '480px' }}>
-          <Search style={{ width: '18px', height: '18px', color: 'var(--text-secondary)' }} />
-          <input
-            type="text"
-            placeholder="Buscar por recurso, SKU, IP ou produto GCP..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            style={{ width: '100%', fontSize: '0.88rem', padding: '9px 14px' }}
-          />
+    <section className="panel" aria-labelledby="inv-title">
+      <div className="panel-head">
+        <div>
+          <h2 className="panel-title" id="inv-title">Inventário</h2>
+          <p className="panel-sub">Valores mensais por recurso. Edite inline ou abra o editor completo.</p>
         </div>
-
-        {/* Category Filter */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Filter style={{ width: '15px', height: '15px', color: 'var(--text-secondary)' }} />
-            <select
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              style={{ padding: '8px 12px', fontSize: '0.82rem' }}
-            >
-              <option value="all">Todas as Categorias</option>
-              <option value="COMPUTE">COMPUTE (VMs / GKE)</option>
-              <option value="DATABASE">DATABASE (Cloud SQL / DB)</option>
-              <option value="STORAGE">STORAGE (Discos / Buckets)</option>
-              <option value="NETWORK">NETWORK (IPs Públicos / Redes / NAT)</option>
-              <option value="CDN">CDN</option>
-              <option value="OBSERVABILITY">OBSERVABILITY</option>
-              <option value="SECURITY">SECURITY (SSL)</option>
-            </select>
-          </div>
-
-          <button
-            onClick={onAddItem}
-            className="btn btn-primary"
-            style={{ padding: '9px 16px', fontSize: '0.85rem', gap: '6px' }}
-          >
-            <Plus style={{ width: '15px', height: '15px' }} />
-            Adicionar Item Manual
+        <div className="controls">
+          <button className={`btn btn-sm ${importerOpen ? '' : 'btn-ghost'}`} onClick={() => setImporterOpen(!importerOpen)} aria-expanded={importerOpen}>
+            <Upload /> Importar
+          </button>
+          <button className="btn btn-sm btn-primary" onClick={onAddItem}>
+            <Plus /> Adicionar recurso
           </button>
         </div>
       </div>
 
-      {/* Main Table */}
-      <div style={{
-        width: '100%',
-        maxWidth: '100%',
-        overflowX: 'auto',
-        WebkitOverflowScrolling: 'touch',
-        borderRadius: '8px',
-        border: '1px solid var(--border-color)',
-        boxShadow: 'inset 0 0 8px rgba(0, 0, 0, 0.2)'
-      }}>
-        <table style={{ width: '100%', minWidth: '1080px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.84rem' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-              <th style={{ padding: '12px 10px', fontWeight: 600 }}>Categoria</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, minWidth: '170px' }}>Recurso Origem & Produto GCP</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, minWidth: '240px' }}>SKU / Especificações & Arquitetura</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, textAlign: 'center', width: '60px' }}>Qtd</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, width: '150px' }}>Região</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right', width: '115px' }}>Sem Commit (PAYG)</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, color: '#38bdf8', textAlign: 'right', width: '115px' }}>Commit 1 Ano</th>
-              <th style={{ padding: '12px 10px', fontWeight: 600, color: '#34d399', textAlign: 'right', width: '135px' }}>Commit 3 Anos</th>
-              <th style={{
-                padding: '12px 10px',
-                fontWeight: 600,
-                textAlign: 'center',
-                position: 'sticky',
-                right: 0,
-                background: '#1e293b',
-                zIndex: 3,
-                boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.3)',
-                width: '140px',
-                minWidth: '140px'
-              }}>
-                Ações
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredItems.length === 0 ? (
-              <tr>
-                <td colSpan={9} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
-                  Nenhum recurso encontrado no inventário. Faça upload de uma planilha ou adicione um item manual.
-                </td>
-              </tr>
-            ) : (
-              filteredItems.map((calcItem) => {
-                const { item, category, originalResourceName, gcpProductSuggested, skuDetails, technicalNotes, paygCostMonthly, cud1yrCostMonthly, cud3yrCostMonthly, cud3yrSavingsMonthly } = calcItem;
-                const badge = getCategoryBadgeStyle(category);
+      {(importerOpen || isEmpty) && importer}
 
-                const savingsPct = paygCostMonthly > 0 && cud3yrSavingsMonthly > 0
-                  ? ((paygCostMonthly - cud3yrCostMonthly) / paygCostMonthly) * 100
-                  : 0;
+      {isEmpty ? (
+        <div className="empty">
+          <div className="empty-icon"><PackageOpen size={22} /></div>
+          <h3>Nenhum recurso no inventário</h3>
+          <p>Importe uma planilha/Terraform acima, adicione um recurso manualmente ou carregue o exemplo.</p>
+          <div className="actions">
+            <button className="btn" onClick={onLoadSample}><FlaskConical /> Carregar exemplo</button>
+            <button className="btn btn-primary" onClick={onAddItem}><Plus /> Adicionar recurso</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="toolbar">
+            <label className="search">
+              <Search aria-hidden />
+              <span className="sr-only">Buscar</span>
+              <input type="search" placeholder="Buscar por nome, SKU, produto ou região…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            </label>
+            <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} aria-label="Filtrar por categoria">
+              <option value="all">Todas as categorias ({calculatedItems.length})</option>
+              {categories.map((cat) => (
+                <option key={cat} value={cat}>
+                  {CATEGORY_LABELS[cat] || cat} ({calculatedItems.filter((c) => c.category === cat).length})
+                </option>
+              ))}
+            </select>
+            <div className="spacer" />
+            {filtered.length !== calculatedItems.length && <span className="faint" style={{ fontSize: '0.78rem' }}>{filtered.length} de {calculatedItems.length}</span>}
+          </div>
 
-                return (
-                  <tr
-                    key={item.id}
-                    style={{
-                      borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-                      transition: 'var(--transition)',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.02)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  >
-                    {/* Category */}
-                    <td style={{ padding: '12px 10px', whiteSpace: 'nowrap' }}>
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '5px',
-                          padding: '3px 8px',
-                          borderRadius: '12px',
-                          fontSize: '0.72rem',
-                          fontWeight: 600,
-                          backgroundColor: badge.bg,
-                          border: `1px solid ${badge.border}`,
-                          color: badge.color,
-                        }}
-                      >
-                        {badge.icon}
-                        {category}
-                      </span>
-                    </td>
+          {filtered.length === 0 ? (
+            <div className="empty"><p>Nenhum recurso corresponde ao filtro.</p></div>
+          ) : (
+            <>
+              <div className="table-wrap">
+                <table className="inv">
+                  <thead>
+                    <tr>
+                      <th style={{ minWidth: 220 }}>Recurso</th>
+                      <th style={{ minWidth: 240 }}>Configuração</th>
+                      <th style={{ minWidth: 250 }}>Região</th>
+                      <th>Qtd</th>
+                      <th className="col-num th-payg">Sob demanda</th>
+                      <th className="col-num th-cud1">CUD 1 ano</th>
+                      <th className="col-num th-cud3">CUD 3 anos</th>
+                      <th className="col-actions"><span className="sr-only">Ações</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((c) => (
+                      <tr key={c.item.id}>
+                        <td><ResourceCell calc={c} onUpdate={onUpdateItem} /></td>
+                        <td><SpecCell calc={c} onUpdate={onUpdateItem} /></td>
+                        <td>
+                          <RegionSelect compact className="input-sm region-select" value={c.item.region} onChange={(region) => onUpdateItem({ ...c.item, region })} />
+                        </td>
+                        <td><QtyInput item={c.item} onUpdate={onUpdateItem} /></td>
+                        <td className="col-num"><Price kind="payg" value={c.paygCostMonthly} base={c.paygCostMonthly} f={f} imported={c.item.customPaygUSD !== undefined} /></td>
+                        <td className="col-num"><Price kind="cud1" value={c.cud1yrCostMonthly} base={c.paygCostMonthly} f={f} imported={c.item.customCud1yrUSD !== undefined} /></td>
+                        <td className="col-num"><Price kind="cud3" value={c.cud3yrCostMonthly} base={c.paygCostMonthly} f={f} imported={c.item.customCud3yrUSD !== undefined} /></td>
+                        <td className="col-actions"><RowActions calc={c} onEdit={onEditItem} onInspect={onInspectPrice} onDelete={onDeleteItem} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
 
-                    {/* Original Resource & GCP Product */}
-                    <td style={{ padding: '12px 10px', minWidth: '170px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{originalResourceName}</span>
-                        <select
-                          value={item.environment || 'prod'}
-                          onChange={(e) => onUpdateItem({ ...item, environment: e.target.value as 'prod' | 'staging' | 'dev' | 'qa' })}
-                          style={{
-                            fontSize: '0.65rem',
-                            padding: '1px 4px',
-                            borderRadius: '3px',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            background: 'rgba(255,255,255,0.05)',
-                            color: item.environment === 'prod' ? '#f87171' : '#a78bfa',
-                            textTransform: 'uppercase',
-                            cursor: 'pointer'
-                          }}
-                          title="Ambiente"
-                        >
-                          <option value="prod" style={{ background: '#1e293b', color: '#fff' }}>PROD</option>
-                          <option value="staging" style={{ background: '#1e293b', color: '#fff' }}>STG</option>
-                          <option value="dev" style={{ background: '#1e293b', color: '#fff' }}>DEV</option>
-                          <option value="qa" style={{ background: '#1e293b', color: '#fff' }}>QA</option>
-                        </select>
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: '#60a5fa', marginTop: '2px' }}>
-                        ➔ {gcpProductSuggested || 'Google Cloud'}
-                      </div>
-                      {technicalNotes && technicalNotes !== 'Sem observações' && (
-                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', fontStyle: 'italic' }}>
-                          ℹ {technicalNotes}
-                        </div>
-                      )}
-                    </td>
+              <div className="inv-cards">
+                {filtered.map((c) => (
+                  <article key={c.item.id} className="inv-card">
+                    <div className="inv-card-head">
+                      <ResourceCell calc={c} onUpdate={onUpdateItem} />
+                      <RowActions calc={c} onEdit={onEditItem} onInspect={onInspectPrice} onDelete={onDeleteItem} />
+                    </div>
+                    <SpecCell calc={c} onUpdate={onUpdateItem} />
+                    <div className="inv-card-row">
+                      <RegionSelect compact className="input-sm region-select" value={c.item.region} onChange={(region) => onUpdateItem({ ...c.item, region })} />
+                      <label className="control-group">
+                        <span className="control-label">Qtd</span>
+                        <QtyInput item={c.item} onUpdate={onUpdateItem} />
+                      </label>
+                    </div>
+                    <div className="inv-card-prices">
+                      <div><div className="lbl">Sob demanda</div><Price kind="payg" value={c.paygCostMonthly} base={c.paygCostMonthly} f={f} imported={c.item.customPaygUSD !== undefined} /></div>
+                      <div><div className="lbl">CUD 1 ano</div><Price kind="cud1" value={c.cud1yrCostMonthly} base={c.paygCostMonthly} f={f} imported={c.item.customCud1yrUSD !== undefined} /></div>
+                      <div><div className="lbl">CUD 3 anos</div><Price kind="cud3" value={c.cud3yrCostMonthly} base={c.paygCostMonthly} f={f} imported={c.item.customCud3yrUSD !== undefined} /></div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
 
-                    {/* SKU & Specs */}
-                    <td style={{ padding: '14px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.86rem' }}>
-                          {skuDetails || item.machineType || 'Shape Customizado'}
-                        </span>
-                        
-                        {/* Database Workload Badge */}
-                        {item.serviceType === 'sql' && (
-                          <span style={{
-                            fontSize: '0.68rem',
-                            padding: '2px 8px',
-                            borderRadius: '10px',
-                            background: 'rgba(168, 85, 247, 0.2)',
-                            color: '#c084fc',
-                            border: '1px solid rgba(168, 85, 247, 0.4)',
-                            fontWeight: 600
-                          }}>
-                            Cloud SQL PaaS
-                          </span>
-                        )}
-                        {item.serviceType === 'compute' && item.isDatabaseWorkload && (
-                          <span style={{
-                            fontSize: '0.68rem',
-                            padding: '2px 8px',
-                            borderRadius: '10px',
-                            background: 'rgba(249, 115, 22, 0.2)',
-                            color: '#fb923c',
-                            border: '1px solid rgba(249, 115, 22, 0.4)',
-                            fontWeight: 600
-                          }}>
-                            Banco em VM
-                          </span>
-                        )}
-                      </div>
+          {calculatedItems.some((c) => c.usesImportedPrices) && (
+            <p className="faint" style={{ fontSize: '0.74rem', marginTop: 10 }}>
+              <span className="imported-flag" style={{ marginLeft: 0 }}>IMP</span> valor importado da planilha. Ele deixa de valer quando você altera a configuração do recurso.
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+};
 
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        {item.serviceType === 'compute' && (
-                          <>
-                            <span>{item.vCPUs} vCPU | {item.ramGB} GB RAM | {item.operatingSystem?.toUpperCase()}</span>
-                            {/* Inline Disk Type Selector */}
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(255,255,255,0.03)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                              <HardDrive style={{ width: '12px', height: '12px', color: '#94a3b8' }} />
-                              <select
-                                value={item.bootDiskType || 'pd-balanced'}
-                                onChange={(e) => onUpdateItem({ ...item, bootDiskType: e.target.value as DiskType })}
-                                style={{
-                                  fontSize: '0.72rem',
-                                  padding: '2px 4px',
-                                  borderRadius: '3px',
-                                  background: 'rgba(255, 255, 255, 0.05)',
-                                  border: '1px solid rgba(255, 255, 255, 0.15)',
-                                  color: '#cbd5e1',
-                                  cursor: 'pointer'
-                                }}
-                                title="Tipo de Disco de Boot"
-                              >
-                                <option value="pd-balanced" style={{ background: '#1e293b', color: '#fff' }}>pd-balanced</option>
-                                <option value="pd-standard" style={{ background: '#1e293b', color: '#fff' }}>pd-standard</option>
-                                <option value="pd-ssd" style={{ background: '#1e293b', color: '#fff' }}>pd-ssd</option>
-                                <option value="hyperdisk-balanced" style={{ background: '#1e293b', color: '#fff' }}>hyperdisk-bal</option>
-                              </select>
-                              <span>{item.bootDiskGB || 50} GB</span>
-                            </span>
+// ---------- Cells ----------
 
-                            {/* Option to toggle HA for database VM */}
-                            {item.isDatabaseWorkload && (
-                              <button
-                                type="button"
-                                onClick={() => onUpdateItem({ ...item, highAvailability: !item.highAvailability })}
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                  padding: '2px 8px',
-                                  borderRadius: '12px',
-                                  fontSize: '0.68rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                  transition: 'all 0.2s',
-                                  backgroundColor: item.highAvailability ? 'rgba(52, 211, 153, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                                  color: item.highAvailability ? '#34d399' : '#94a3b8',
-                                  border: `1px solid ${item.highAvailability ? 'rgba(52, 211, 153, 0.4)' : 'rgba(255, 255, 255, 0.2)'}`
-                                }}
-                                title={item.highAvailability ? 'Alta Disponibilidade ativada (Clique para desativar)' : 'Clique para habilitar Alta Disponibilidade (Multi-Zone HA)'}
-                              >
-                                <ShieldCheck style={{ width: '12px', height: '12px' }} />
-                                {item.highAvailability ? '✓ HA Ativo' : '+ Habilitar HA'}
-                              </button>
-                            )}
-                          </>
-                        )}
+const ResourceCell: React.FC<{ calc: CalculatedCostItem; onUpdate: (i: InventoryItem) => void }> = ({ calc, onUpdate }) => {
+  const { item } = calc;
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div className="res-line">
+        <CategoryChip category={calc.category} />
+        <select
+          className={`env-select env-${item.environment}`}
+          value={item.environment}
+          onChange={(e) => onUpdate({ ...item, environment: e.target.value as Environment })}
+          aria-label="Ambiente"
+        >
+          {ENV_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
+      <div className="res-name" style={{ marginTop: 6 }}>{calc.originalResourceName}</div>
+      <div className="res-product">{calc.gcpProductSuggested}</div>
+      {calc.technicalNotes && <div className="res-note">{calc.technicalNotes}</div>}
+    </div>
+  );
+};
 
-                        {item.serviceType === 'sql' && (
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                            <span>{item.dbEngine} | {item.vCPUs} vCPU | {item.ramGB} GB RAM | {item.dbStorageGB || 100} GB SSD</span>
-                            {/* Direct HA Toggle for Cloud SQL */}
-                            <button
-                              type="button"
-                              onClick={() => onUpdateItem({ ...item, highAvailability: !item.highAvailability })}
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                padding: '2px 8px',
-                                borderRadius: '12px',
-                                fontSize: '0.68rem',
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                                transition: 'all 0.2s',
-                                backgroundColor: item.highAvailability ? 'rgba(52, 211, 153, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                                color: item.highAvailability ? '#34d399' : '#94a3b8',
-                                border: `1px solid ${item.highAvailability ? 'rgba(52, 211, 153, 0.4)' : 'rgba(255, 255, 255, 0.2)'}`
-                              }}
-                              title={item.highAvailability ? 'Alta Disponibilidade Multi-Zone ativada no Cloud SQL (Clique para alternar para Single-Zone)' : 'Clique para ativar Alta Disponibilidade Multi-Zone (SLA 99.95%)'}
-                            >
-                              <ShieldCheck style={{ width: '12px', height: '12px' }} />
-                              {item.highAvailability ? '✓ HA Ativo (Multi-Zone)' : '+ Habilitar HA (Multi-Zone)'}
-                            </button>
-                          </div>
-                        )}
+const DiskSelect: React.FC<{ value: DiskType; onChange: (d: DiskType) => void }> = ({ value, onChange }) => (
+  <select className="input-sm" value={value} onChange={(e) => onChange(e.target.value as DiskType)} aria-label="Tipo de disco">
+    {(Object.keys(DISK_LABELS) as DiskType[]).map((d) => <option key={d} value={d}>{d}</option>)}
+  </select>
+);
 
-                        {item.serviceType === 'disk' && (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(255,255,255,0.03)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                            <HardDrive style={{ width: '12px', height: '12px', color: '#facc15' }} />
-                            <select
-                              value={item.bootDiskType || 'pd-balanced'}
-                              onChange={(e) => onUpdateItem({ ...item, bootDiskType: e.target.value as DiskType })}
-                              style={{
-                                fontSize: '0.72rem',
-                                padding: '2px 4px',
-                                borderRadius: '3px',
-                                background: 'rgba(255, 255, 255, 0.05)',
-                                border: '1px solid rgba(255, 255, 255, 0.15)',
-                                color: '#facc15',
-                                cursor: 'pointer'
-                              }}
-                              title="Tipo de Disco"
-                            >
-                              <option value="pd-balanced" style={{ background: '#1e293b', color: '#fff' }}>pd-balanced</option>
-                              <option value="pd-standard" style={{ background: '#1e293b', color: '#fff' }}>pd-standard</option>
-                              <option value="pd-ssd" style={{ background: '#1e293b', color: '#fff' }}>pd-ssd</option>
-                              <option value="hyperdisk-balanced" style={{ background: '#1e293b', color: '#fff' }}>hyperdisk-bal</option>
-                            </select>
-                            <span>{item.bootDiskGB || 100} GB</span>
-                          </span>
-                        )}
+const SpecCell: React.FC<{ calc: CalculatedCostItem; onUpdate: (i: InventoryItem) => void }> = ({ calc, onUpdate }) => {
+  const { item } = calc;
 
-                        {item.serviceType === 'network' && (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                            <Network style={{ width: '12px', height: '12px', color: '#2dd4bf' }} />
-                            {item.networkType === 'nat' && 'Cloud NAT Gateway + Processamento'}
-                            {item.networkType === 'load_balancer' && 'Cloud Load Balancing (Forwarding Rules)'}
-                            {item.networkType === 'vpn' && 'Cloud HA VPN Gateway'}
-                            {item.networkType === 'egress' && `${item.egressGB || 100} GB Tráfego de Saída (Internet Egress)`}
-                            {(!item.networkType || item.networkType === 'ip') && `${item.ipCount || 1} Endereço(s) IP Público Estático`}
-                          </span>
-                        )}
-                      </div>
-                    </td>
+  if (item.serviceType === 'compute' || item.serviceType === 'gke') {
+    const spec = getMachineSpec(item.machineType);
+    const vcpu = spec?.vCPUs ?? item.vCPUs ?? 2;
+    const ram = spec?.ramGB ?? item.ramGB ?? 8;
+    const hours = item.usageHoursPerMonth ?? 730;
+    return (
+      <div>
+        <div className="spec-main">{calc.skuDetails}</div>
+        <div className="spec-sub">
+          {vcpu} vCPU{spec?.sharedCore ? ' compart.' : ''} · {ram} GB · {(item.operatingSystem || 'linux').toUpperCase()}
+          {hours < 730 && ` · ${hours} h/mês`}
+          {item.discountType === 'spot' && ' · Spot'}
+        </div>
+        <div className="spec-controls">
+          <DiskSelect value={item.bootDiskType || 'pd-balanced'} onChange={(d) => onUpdate({ ...item, bootDiskType: d })} />
+          <span className="faint num" style={{ fontSize: '0.74rem' }}>
+            {item.bootDiskGB || 0} GB{item.additionalDiskGB ? ` + ${item.additionalDiskGB} GB` : ''}
+          </span>
+          {item.isDatabaseWorkload && <span className="chip chip-amber">Banco em VM</span>}
+        </div>
+      </div>
+    );
+  }
 
-                    {/* Quantity */}
-                    <td style={{ padding: '12px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                      <input
-                        type="number"
-                        min="1"
-                        max="999"
-                        value={item.quantity || 1}
-                        onChange={(e) => {
-                          const val = Math.max(1, parseInt(e.target.value, 10) || 1);
-                          onUpdateItem({ ...item, quantity: val });
-                        }}
-                        style={{
-                          width: '52px',
-                          padding: '3px 4px',
-                          fontSize: '0.78rem',
-                          textAlign: 'center',
-                          background: 'rgba(255, 255, 255, 0.05)',
-                          border: '1px solid rgba(255, 255, 255, 0.15)',
-                          borderRadius: '4px',
-                          color: 'var(--text-primary)'
-                        }}
-                        title="Quantidade"
-                      />
-                    </td>
+  if (item.serviceType === 'sql') {
+    const tier = parseSqlTier(item.dbTier);
+    return (
+      <div>
+        <div className="spec-main">{item.dbTier || 'db-custom-2-8192'}</div>
+        <div className="spec-sub">
+          {engineName(item.dbEngine)}
+          {tier && ` · ${tier.vCPUs} vCPU · ${tier.ramGB} GB`} · {item.dbStorageGB || 100} GB SSD
+        </div>
+        <div className="spec-controls">
+          <button
+            type="button"
+            className="toggle-chip"
+            aria-pressed={!!item.highAvailability}
+            onClick={() => onUpdate({ ...item, highAvailability: !item.highAvailability })}
+            title="Alta disponibilidade regional (standby em outra zona)"
+          >
+            <ShieldCheck /> {item.highAvailability ? 'HA regional' : 'Zonal · ativar HA'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
-                    {/* Region */}
-                    <td style={{ padding: '12px 10px', whiteSpace: 'nowrap' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Globe style={{ width: '12px', height: '12px', color: 'var(--text-muted)' }} />
-                        <select
-                          value={item.region}
-                          onChange={(e) => onUpdateItem({ ...item, region: e.target.value as GCPRegion })}
-                          style={{
-                            background: 'rgba(255, 255, 255, 0.05)',
-                            border: '1px solid rgba(255, 255, 255, 0.15)',
-                            borderRadius: '4px',
-                            color: 'var(--text-primary)',
-                            padding: '3px 6px',
-                            fontSize: '0.74rem',
-                            maxWidth: '145px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <option value="southamerica-east1" style={{ background: '#1e293b', color: '#fff' }}>São Paulo (BR)</option>
-                          <option value="us-central1" style={{ background: '#1e293b', color: '#fff' }}>Iowa (EUA)</option>
-                          <option value="us-east1" style={{ background: '#1e293b', color: '#fff' }}>N. Virginia (EUA)</option>
-                          <option value="europe-west1" style={{ background: '#1e293b', color: '#fff' }}>Bélgica (EU)</option>
-                        </select>
-                      </div>
-                    </td>
+  if (item.serviceType === 'disk') {
+    return (
+      <div>
+        <div className="spec-main">Persistent Disk</div>
+        <div className="spec-controls">
+          <DiskSelect value={item.bootDiskType || 'pd-balanced'} onChange={(d) => onUpdate({ ...item, bootDiskType: d })} />
+          <span className="faint num" style={{ fontSize: '0.74rem' }}>{item.bootDiskGB || 50} GB</span>
+        </div>
+      </div>
+    );
+  }
 
-                    {/* Scenario 1: PAYG */}
-                    <td style={{ padding: '12px 10px', textAlign: 'right', fontWeight: 600, color: 'var(--text-primary)' }}>
-                      {formatCost(paygCostMonthly)}
-                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>/ mês</div>
-                    </td>
+  if (item.serviceType === 'storage') {
+    return (
+      <div>
+        <div className="spec-main">{(item.storageGB || 0).toLocaleString('pt-BR')} GB</div>
+        <div className="spec-controls">
+          <select
+            className="input-sm"
+            value={item.storageClass || 'standard'}
+            onChange={(e) => onUpdate({ ...item, storageClass: e.target.value as InventoryItem['storageClass'] })}
+            aria-label="Classe de armazenamento"
+          >
+            <option value="standard">Standard</option>
+            <option value="nearline">Nearline</option>
+            <option value="coldline">Coldline</option>
+            <option value="archive">Archive</option>
+          </select>
+        </div>
+      </div>
+    );
+  }
 
-                    {/* Scenario 2: 1Y CUD */}
-                    <td style={{ padding: '12px 10px', textAlign: 'right', fontWeight: 600, color: '#38bdf8' }}>
-                      {formatCost(cud1yrCostMonthly)}
-                      <div style={{ fontSize: '0.68rem', color: paygCostMonthly > cud1yrCostMonthly ? '#38bdf8' : 'var(--text-muted)' }}>
-                        {paygCostMonthly > cud1yrCostMonthly ? `-${((1 - cud1yrCostMonthly / paygCostMonthly) * 100).toFixed(0)}%` : 'sem desc.'}
-                      </div>
-                    </td>
+  if (item.serviceType === 'network') {
+    const nt = item.networkType || 'egress';
+    const desc =
+      nt === 'ip' ? `${item.ipCount || 1} IPv4 externo(s)` :
+      nt === 'nat' ? `Gateway + ${item.egressGB || 0} GB processados` :
+      nt === 'load_balancer' ? `Regra de encaminhamento + ${item.egressGB || 0} GB` :
+      nt === 'vpn' ? 'Túnel HA VPN' :
+      item.unitCostUSD && !item.egressGB ? 'Valor mensal informado' :
+      `${item.egressGB ?? 100} GB de saída/mês`;
+    return (
+      <div>
+        <div className="spec-main">{calc.gcpProductSuggested}</div>
+        <div className="spec-sub">{desc}</div>
+      </div>
+    );
+  }
 
-                    {/* Scenario 3: 3Y CUD */}
-                    <td style={{ padding: '12px 10px', textAlign: 'right', fontWeight: 600, color: '#34d399' }}>
-                      {formatCost(cud3yrCostMonthly)}
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px', marginTop: '2px' }}>
-                        {savingsPct > 0 ? (
-                          <span style={{
-                            padding: '1px 6px',
-                            borderRadius: '8px',
-                            fontSize: '0.68rem',
-                            fontWeight: 700,
-                            backgroundColor: 'rgba(52, 211, 153, 0.15)',
-                            color: '#34d399',
-                            border: '1px solid rgba(52, 211, 153, 0.3)'
-                          }}>
-                            -{savingsPct.toFixed(0)}%
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>sem desc.</span>
-                        )}
-                      </div>
-                    </td>
+  return (
+    <div>
+      <div className="spec-main">{calc.skuDetails || '—'}</div>
+      <div className="spec-sub">Sem precificação automática: informe um valor importado</div>
+    </div>
+  );
+};
 
-                    {/* Actions (Sticky Right) */}
-                    <td style={{
-                      padding: '12px 10px',
-                      textAlign: 'center',
-                      whiteSpace: 'nowrap',
-                      position: 'sticky',
-                      right: 0,
-                      background: 'rgba(23, 32, 51, 0.95)',
-                      backdropFilter: 'blur(8px)',
-                      zIndex: 2,
-                      boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.3)',
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                        <button
-                          onClick={() => onEditItem(item)}
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 8px', fontSize: '0.72rem', gap: '4px', borderColor: 'rgba(167, 139, 250, 0.4)', color: '#c084fc' }}
-                          title="Editar Configurações, Discos e Arquitetura"
-                        >
-                          <Edit3 style={{ width: '13px', height: '13px', color: '#c084fc' }} />
-                          Editar
-                        </button>
+const QtyInput: React.FC<{ item: InventoryItem; onUpdate: (i: InventoryItem) => void }> = ({ item, onUpdate }) => (
+  <input
+    type="number"
+    min={1}
+    max={9999}
+    className="input-sm qty-input"
+    value={item.quantity || 1}
+    onChange={(e) => onUpdate({ ...item, quantity: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+    aria-label="Quantidade"
+  />
+);
 
-                        <button
-                          onClick={() => onInspectPrice(calcItem)}
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 8px', fontSize: '0.72rem', gap: '4px' }}
-                          title="Auditar Fórmula e SKUs GCP"
-                        >
-                          <ShieldCheck style={{ width: '13px', height: '13px', color: '#38bdf8' }} />
-                          Auditar
-                        </button>
-
-                        <button
-                          onClick={() => onDeleteItem(item.id)}
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            color: 'var(--accent-red)',
-                            cursor: 'pointer',
-                            padding: '4px',
-                            borderRadius: '4px',
-                          }}
-                          title="Excluir Item"
-                        >
-                          <Trash2 style={{ width: '14px', height: '14px' }} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+const Price: React.FC<{ kind: 'payg' | 'cud1' | 'cud3'; value: number; base: number; f: (v: number) => string; imported?: boolean }> = ({ kind, value, base, f, imported }) => {
+  const pct = base > 0 ? (1 - value / base) * 100 : 0;
+  return (
+    <div>
+      <span className={`price price-${kind}`}>
+        {f(value)}
+        {imported && <span className="imported-flag" title="Valor importado da planilha">IMP</span>}
+      </span>
+      <div className={`price-sub ${kind !== 'payg' && pct >= 0.5 ? `good price-${kind}` : ''}`}>
+        {kind === 'payg' ? '/mês' : pct >= 0.5 ? `−${pct.toFixed(0)}%` : 'sem desconto'}
       </div>
     </div>
   );
 };
+
+const RowActions: React.FC<{
+  calc: CalculatedCostItem;
+  onEdit: (i: InventoryItem) => void;
+  onInspect: (c: CalculatedCostItem) => void;
+  onDelete: (id: string) => void;
+}> = ({ calc, onEdit, onInspect, onDelete }) => (
+  <div style={{ display: 'inline-flex', gap: 2, flex: 'none' }}>
+    <button className="icon-btn" onClick={() => onEdit(calc.item)} title="Editar recurso" aria-label={`Editar ${calc.item.name}`}>
+      <Pencil />
+    </button>
+    <button className="icon-btn" onClick={() => onInspect(calc)} title="Ver memória de cálculo" aria-label={`Memória de cálculo de ${calc.item.name}`}>
+      <Calculator />
+    </button>
+    <button className="icon-btn danger" onClick={() => onDelete(calc.item.id)} title="Remover" aria-label={`Remover ${calc.item.name}`}>
+      <Trash2 />
+    </button>
+  </div>
+);

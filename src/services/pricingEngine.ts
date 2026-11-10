@@ -1,400 +1,341 @@
-import { InventoryItem, CalculatedCostItem, GCPRegion, DiscountType, CalculatorSummary, GCPResourceCategory } from '../types/gcp';
-import { GCP_REGIONAL_PRICING, MACHINE_SPECS_CATALOG, SUD_FULL_MONTH_DISCOUNT, CUD_DISCOUNTS } from '../data/gcpPricingCatalog';
+import { InventoryItem, CalculatedCostItem, DiscountType, CalculatorSummary, GCPResourceCategory } from '../types/gcp';
+import {
+  getMachineSpec,
+  sustainedUseDiscount,
+  osLicenseHourly,
+  CUD_RATES,
+  SPOT_DISCOUNT,
+  DISK_GB_MONTHLY_USD,
+  STORAGE_GB_MONTHLY_USD,
+  CLOUD_SQL,
+  parseSqlTier,
+  NETWORK,
+  GKE_CLUSTER_MANAGEMENT_MONTHLY_USD,
+  regionalRates,
+  FAMILY_BY_ID,
+  MachineFamily,
+} from '../data/gcpPricingCatalog';
+
+const usd = (n: number, d = 2) => `$${n.toFixed(d)}`;
+
+export function inferCategory(item: InventoryItem): GCPResourceCategory {
+  if (item.category) return item.category;
+  if (item.serviceType === 'sql') return 'DATABASE';
+  if (item.serviceType === 'disk' || item.serviceType === 'storage') return 'STORAGE';
+  if (item.serviceType === 'network') return 'NETWORK';
+  return 'COMPUTE';
+}
 
 export function calculateItemCost(item: InventoryItem): CalculatedCostItem {
-  const region: GCPRegion = item.region || 'us-central1';
-  const pricing = GCP_REGIONAL_PRICING[region] || GCP_REGIONAL_PRICING['us-central1'];
+  const rates = regionalRates(item.region);
   const qty = Math.max(1, item.quantity || 1);
-  const hours = item.usageHoursPerMonth ?? 730;
+  const hours = Math.min(730, Math.max(0, item.usageHoursPerMonth ?? 730));
+  const category = inferCategory(item);
+  const isComputeLike = item.serviceType === 'compute' || item.serviceType === 'gke';
 
-  // Standardize Category
-  let category: GCPResourceCategory = item.category || 'COMPUTE';
-  if (!item.category) {
-    if (item.serviceType === 'sql') category = 'DATABASE';
-    else if (item.serviceType === 'disk' || item.serviceType === 'storage') category = 'STORAGE';
-    else if (item.serviceType === 'network') category = 'NETWORK';
-    else category = 'COMPUTE';
-  }
+  const steps: string[] = [];
+  const skuRefs: string[] = [];
 
-  let vcpuRate = pricing.vcpuHourlyUSD;
-  let ramRate = pricing.ramGBHourlyUSD;
-  let vcpus = item.vCPUs || 2;
-  let ramGB = item.ramGB || 8;
-  const auditFormulaSteps: string[] = [];
-  const skuReferences: string[] = [];
-
-  // Check predefined machine spec for Compute
-  if (item.serviceType === 'compute' || item.serviceType === 'gke') {
-    if (item.machineType && MACHINE_SPECS_CATALOG[item.machineType.toLowerCase()]) {
-      const spec = MACHINE_SPECS_CATALOG[item.machineType.toLowerCase()];
-      vcpus = spec.vCPUs;
-      ramGB = spec.ramGB;
-      vcpuRate = pricing.vcpuHourlyUSD * spec.multiplier;
-      ramRate = pricing.ramGBHourlyUSD * spec.multiplier;
-      skuReferences.push(`Compute Machine Type SKU: ${item.machineType} (${vcpus} vCPU, ${ramGB} GB RAM, Family: ${spec.family.toUpperCase()})`);
-    } else {
-      skuReferences.push(`Custom Compute SKU: ${vcpus} vCPU @ $${vcpuRate.toFixed(6)}/hr, ${ramGB} GB RAM @ $${ramRate.toFixed(6)}/hr`);
-    }
-  }
-
-  // OS License Rate
+  // ---------- 1. Compute ----------
+  const spec = isComputeLike ? getMachineSpec(item.machineType) : null;
+  const family: MachineFamily = spec?.family || FAMILY_BY_ID.e2;
+  const vcpus = spec ? spec.vCPUs : item.vCPUs || 2;
+  const billableVcpus = spec ? spec.billableVCPUs : vcpus;
+  const ramGB = spec ? spec.ramGB : item.ramGB || 8;
+  const vcpuRate = family.vcpuHourlyUSD * rates.compute;
+  const ramRate = family.ramGBHourlyUSD * rates.compute;
   const os = item.operatingSystem || 'linux';
-  let osRate = pricing.osHourlyUSD[os] || 0.0;
-  if (item.serviceType === 'compute' || item.serviceType === 'gke') {
-    if (os === 'windows') {
-      osRate = pricing.osHourlyUSD.windows * vcpus;
-      skuReferences.push(`OS SKU: Windows Server ($0.046/vCPU/hr * ${vcpus} vCPUs = $${osRate.toFixed(4)}/hr)`);
-    } else if (os === 'rhel' || os === 'sles') {
-      osRate = pricing.osHourlyUSD[os];
-      skuReferences.push(`OS SKU: ${os.toUpperCase()} ($${osRate.toFixed(4)}/hr)`);
-    } else {
-      skuReferences.push(`OS SKU: Linux/Ubuntu (Gratuito $0.00/hr)`);
+  const osRate = isComputeLike ? osLicenseHourly(os, vcpus, !!spec?.sharedCore) : 0;
+
+  let baseComputeMonthlyCost = 0;
+  let sudRate = 0;
+  if (isComputeLike) {
+    const hwHourly = billableVcpus * vcpuRate + ramGB * ramRate;
+    const hourly = hwHourly + osRate;
+    baseComputeMonthlyCost = hourly * hours * qty;
+    sudRate = sustainedUseDiscount(family.sud, hours);
+
+    skuRefs.push(
+      spec
+        ? `Machine type ${spec.name} — família ${family.label} (${vcpus} vCPU${spec.sharedCore ? ' compartilhada' : ''}, ${ramGB} GB)`
+        : `Shape customizado (sem machine type reconhecido) — tarifa ${family.label}: ${vcpus} vCPU, ${ramGB} GB`,
+      `Tarifa regional ${rates.region.id}: vCPU ${usd(vcpuRate, 6)}/h · RAM ${usd(ramRate, 6)}/GB·h (índice ${rates.compute.toFixed(3)}× us-central1)`,
+    );
+    if (osRate > 0) skuRefs.push(`Licença ${os.toUpperCase()}: ${usd(osRate, 4)}/h por instância`);
+
+    steps.push(
+      `Compute (${qty}× ${spec?.name || 'custom'}, ${hours} h/mês)`,
+      `  vCPU: ${billableVcpus} × ${usd(vcpuRate, 6)} = ${usd(billableVcpus * vcpuRate, 4)}/h`,
+      `  RAM:  ${ramGB} GB × ${usd(ramRate, 6)} = ${usd(ramGB * ramRate, 4)}/h`,
+      osRate > 0 ? `  Licença SO: ${usd(osRate, 4)}/h` : `  Licença SO: gratuita (${os})`,
+      `  ${usd(hourly, 4)}/h × ${hours} h × ${qty} = ${usd(baseComputeMonthlyCost)}`,
+    );
+
+    if (item.serviceType === 'gke') {
+      baseComputeMonthlyCost += GKE_CLUSTER_MANAGEMENT_MONTHLY_USD;
+      skuRefs.push(`GKE: taxa de gerenciamento de cluster ${usd(GKE_CLUSTER_MANAGEMENT_MONTHLY_USD)}/mês`);
+      steps.push(`  + taxa de gerenciamento GKE ${usd(GKE_CLUSTER_MANAGEMENT_MONTHLY_USD)}`);
     }
   }
 
-  // 1. Compute Base Calculation
-  let baseComputeMonthlyCost = 0;
-  if (item.serviceType === 'compute' || item.serviceType === 'gke') {
-    const hourlyComputePerInstance = (vcpus * vcpuRate) + (ramGB * ramRate) + osRate;
-    baseComputeMonthlyCost = hourlyComputePerInstance * hours * qty;
-
-    auditFormulaSteps.push(
-      `1. Cálculo de Compute Base (${qty}x ${item.name}):`,
-      `   • Taxa vCPU (${vcpus} vCPU x $${vcpuRate.toFixed(6)}/hr) = $${(vcpus * vcpuRate).toFixed(4)}/hr`,
-      `   • Taxa RAM (${ramGB} GB x $${ramRate.toFixed(6)}/hr) = $${(ramGB * ramRate).toFixed(4)}/hr`,
-      `   • Licença SO (${os.toUpperCase()}) = $${osRate.toFixed(4)}/hr`,
-      `   • Custo Horário por Instância = $${hourlyComputePerInstance.toFixed(4)}/hr`,
-      `   • Subtotal Compute Mensal (${hours}h/mês x ${qty} uni) = $${baseComputeMonthlyCost.toFixed(2)} USD`
-    );
-  }
-
-  // 2. Disk Base Calculation
+  // ---------- 2. Discos ----------
   let baseDiskMonthlyCost = 0;
   let bootDiskRate = 0;
   let additionalDiskRate = 0;
+  const diskRate = (t: keyof typeof DISK_GB_MONTHLY_USD) => (DISK_GB_MONTHLY_USD[t] ?? DISK_GB_MONTHLY_USD['pd-balanced']) * rates.disk;
 
-  if (item.serviceType === 'compute' || item.serviceType === 'gke') {
+  if (isComputeLike) {
     if (item.bootDiskGB && item.bootDiskGB > 0) {
-      const bootDiskType = item.bootDiskType || 'pd-balanced';
-      bootDiskRate = pricing.diskGBMonthlyUSD[bootDiskType] || 0.10;
-      const bootDiskCost = item.bootDiskGB * bootDiskRate * qty;
-      baseDiskMonthlyCost += bootDiskCost;
-      skuReferences.push(`Boot Disk SKU: ${bootDiskType} ($${bootDiskRate.toFixed(3)}/GB/mês)`);
-      auditFormulaSteps.push(
-        `2. Disco de Boot (${bootDiskType.toUpperCase()}):`,
-        `   • ${item.bootDiskGB} GB x $${bootDiskRate.toFixed(3)}/GB/mês x ${qty} uni = $${bootDiskCost.toFixed(2)} USD`
-      );
+      const t = item.bootDiskType || 'pd-balanced';
+      bootDiskRate = diskRate(t);
+      const cost = item.bootDiskGB * bootDiskRate * qty;
+      baseDiskMonthlyCost += cost;
+      skuRefs.push(`Disco de boot ${t}: ${usd(bootDiskRate, 4)}/GB·mês`);
+      steps.push(`Disco de boot ${t}: ${item.bootDiskGB} GB × ${usd(bootDiskRate, 4)} × ${qty} = ${usd(cost)}`);
     }
-
     if (item.additionalDiskGB && item.additionalDiskGB > 0) {
-      const addDiskType = item.additionalDiskType || 'pd-balanced';
-      additionalDiskRate = pricing.diskGBMonthlyUSD[addDiskType] || 0.10;
-      const addDiskCost = item.additionalDiskGB * additionalDiskRate * qty;
-      baseDiskMonthlyCost += addDiskCost;
-      skuReferences.push(`Additional Disk SKU: ${addDiskType} ($${additionalDiskRate.toFixed(3)}/GB/mês)`);
-      auditFormulaSteps.push(
-        `3. Disco Adicional (${addDiskType.toUpperCase()}):`,
-        `   • ${item.additionalDiskGB} GB x $${additionalDiskRate.toFixed(3)}/GB/mês x ${qty} uni = $${addDiskCost.toFixed(2)} USD`
-      );
+      const t = item.additionalDiskType || 'pd-balanced';
+      additionalDiskRate = diskRate(t);
+      const cost = item.additionalDiskGB * additionalDiskRate * qty;
+      baseDiskMonthlyCost += cost;
+      skuRefs.push(`Disco adicional ${t}: ${usd(additionalDiskRate, 4)}/GB·mês`);
+      steps.push(`Disco adicional ${t}: ${item.additionalDiskGB} GB × ${usd(additionalDiskRate, 4)} × ${qty} = ${usd(cost)}`);
     }
   } else if (item.serviceType === 'disk') {
-    const diskGB = item.bootDiskGB || item.additionalDiskGB || 50;
-    const diskType = item.bootDiskType || item.additionalDiskType || 'pd-balanced';
-    bootDiskRate = pricing.diskGBMonthlyUSD[diskType] || 0.10;
-    baseDiskMonthlyCost = diskGB * bootDiskRate * qty;
-    skuReferences.push(`Persistent Disk SKU: ${diskType} ($${bootDiskRate.toFixed(3)}/GB/mês)`);
-    auditFormulaSteps.push(
-      `2. Persistent Disk (${diskType.toUpperCase()}):`,
-      `   • ${diskGB} GB x $${bootDiskRate.toFixed(3)}/GB/mês x ${qty} uni = $${baseDiskMonthlyCost.toFixed(2)} USD`
-    );
+    const gb = item.bootDiskGB || item.additionalDiskGB || 50;
+    const t = item.bootDiskType || item.additionalDiskType || 'pd-balanced';
+    bootDiskRate = diskRate(t);
+    baseDiskMonthlyCost = gb * bootDiskRate * qty;
+    skuRefs.push(`Persistent Disk ${t}: ${usd(bootDiskRate, 4)}/GB·mês`);
+    steps.push(`Persistent Disk ${t}: ${gb} GB × ${usd(bootDiskRate, 4)} × ${qty} = ${usd(baseDiskMonthlyCost)}`);
   }
 
-  // 3. Storage Service Calculation
+  // ---------- 3. Cloud Storage ----------
   let baseStorageMonthlyCost = 0;
-  if (item.serviceType === 'storage' && item.storageGB) {
-    const storageClass = item.storageClass || 'standard';
-    const storageRate = pricing.storageGBMonthlyUSD[storageClass] || 0.020;
-    baseStorageMonthlyCost = item.storageGB * storageRate * qty;
-    skuReferences.push(`Cloud Storage SKU: ${storageClass.toUpperCase()} ($${storageRate.toFixed(4)}/GB/mês)`);
-    auditFormulaSteps.push(
-      `4. Cloud Storage (${storageClass.toUpperCase()}):`,
-      `   • ${item.storageGB} GB x $${storageRate.toFixed(4)}/GB/mês x ${qty} uni = $${baseStorageMonthlyCost.toFixed(2)} USD`
-    );
+  if (item.serviceType === 'storage') {
+    const cls = item.storageClass || 'standard';
+    const gb = item.storageGB || 0;
+    const rate = STORAGE_GB_MONTHLY_USD[cls] * rates.storage;
+    baseStorageMonthlyCost = gb * rate * qty;
+    skuRefs.push(`Cloud Storage ${cls} (regional): ${usd(rate, 4)}/GB·mês`);
+    steps.push(`Cloud Storage ${cls}: ${gb} GB × ${usd(rate, 4)} × ${qty} = ${usd(baseStorageMonthlyCost)}`);
   }
 
-  // 4. Database (Cloud SQL) Calculation
+  // ---------- 4. Cloud SQL ----------
   let baseDatabaseMonthlyCost = 0;
   if (item.serviceType === 'sql') {
-    const dbTier = item.dbTier || 'db-custom-2-8192';
-    const dbHourly = pricing.sqlHourlyUSD[dbTier] || pricing.sqlHourlyUSD['db-custom-2-7680'] || 0.15;
-    const haMultiplier = item.highAvailability ? 2.0 : 1.0;
-    
-    let dbStorageCost = 0;
-    if (item.dbStorageGB) {
-      const dbStorageRate = pricing.diskGBMonthlyUSD['pd-ssd']; // Cloud SQL uses SSD storage
-      dbStorageCost = item.dbStorageGB * dbStorageRate * haMultiplier * qty;
-    }
+    const tierSpec = parseSqlTier(item.dbTier) || { tier: item.dbTier || 'custom', vCPUs: item.vCPUs || 2, ramGB: item.ramGB || 8 };
+    const ha = item.highAvailability ? 2 : 1;
+    const instanceHourly = tierSpec.sharedHourlyUSD !== undefined
+      ? tierSpec.sharedHourlyUSD * rates.compute
+      : (tierSpec.vCPUs * CLOUD_SQL.vcpuHourlyUSD + tierSpec.ramGB * CLOUD_SQL.ramGBHourlyUSD) * rates.compute;
+    const licenseHourly = item.dbEngine === 'SQLSERVER' ? Math.max(4, tierSpec.vCPUs) * CLOUD_SQL.sqlServerStandardPerVCPUHourlyUSD : 0;
+    const instanceCost = instanceHourly * hours * ha * qty;
+    const licenseCost = licenseHourly * hours * qty; // licença não dobra com HA (standby não licenciado)
+    const storageGB = item.dbStorageGB || 100;
+    const storageRate = CLOUD_SQL.ssdGBMonthlyUSD * rates.disk;
+    const storageCost = storageGB * storageRate * ha * qty;
+    baseDatabaseMonthlyCost = instanceCost + licenseCost + storageCost;
 
-    baseDatabaseMonthlyCost = (dbHourly * hours * haMultiplier * qty) + dbStorageCost;
-    skuReferences.push(`Cloud SQL SKU: ${dbTier} ($${dbHourly.toFixed(4)}/hr ${item.highAvailability ? 'High Availability HA 2x' : 'Single Zone'})`);
-    auditFormulaSteps.push(
-      `5. Cloud SQL Instance (${dbTier}, ${item.highAvailability ? 'HA 2x' : 'Single Zone'}):`,
-      `   • Compute DB: $${dbHourly.toFixed(4)}/hr x ${hours}h x ${haMultiplier} HA x ${qty} = $${(dbHourly * hours * haMultiplier * qty).toFixed(2)} USD`,
-      `   • Storage DB: $${dbStorageCost.toFixed(2)} USD`,
-      `   • Subtotal Database = $${baseDatabaseMonthlyCost.toFixed(2)} USD`
+    skuRefs.push(
+      `Cloud SQL ${item.dbEngine || 'MYSQL'} ${tierSpec.tier} (${tierSpec.vCPUs} vCPU, ${tierSpec.ramGB} GB) — ${item.highAvailability ? 'HA regional (primária + standby)' : 'zonal'}`,
+      `Armazenamento SSD Cloud SQL: ${usd(storageRate, 4)}/GB·mês`,
+    );
+    if (licenseHourly) skuRefs.push(`Licença SQL Server Standard: ${usd(licenseHourly, 3)}/h`);
+    steps.push(
+      `Cloud SQL ${tierSpec.tier}${item.highAvailability ? ' (HA ×2)' : ''}`,
+      `  Instância: ${usd(instanceHourly, 4)}/h × ${hours} h × ${ha} × ${qty} = ${usd(instanceCost)}`,
+      licenseHourly ? `  Licença SQL Server: ${usd(licenseCost)}` : '',
+      `  Storage: ${storageGB} GB × ${usd(storageRate, 4)} × ${ha} × ${qty} = ${usd(storageCost)}`,
     );
   }
 
-  // 5. Network (Egress, IP, NAT, LB, VPN) Calculation
+  // ---------- 5. Rede ----------
   let baseNetworkMonthlyCost = 0;
   if (item.serviceType === 'network') {
-    const regionMultiplier = item.region === 'southamerica-east1' ? 1.35 : 1.0;
-    const textDesc = ((item.originalResourceName || item.name || '') + ' ' + (item.skuDetails || '')).toLowerCase();
-
-    if (item.networkType === 'ip' || (item.ipCount && item.ipCount > 0) || textDesc.includes('ip') || textDesc.includes('address')) {
-      const ipCount = item.ipCount || 1;
-      const ipRate = item.unitCostUSD ?? (3.65 * regionMultiplier);
-      baseNetworkMonthlyCost = ipCount * ipRate * qty;
-      skuReferences.push(`Network SKU: External IPv4 Address (${ipCount}x @ $${ipRate.toFixed(2)}/IP/mês)`);
-      auditFormulaSteps.push(
-        `6. Rede - Endereço IP Público Externo:`,
-        `   • ${ipCount} IP(s) x $${ipRate.toFixed(2)}/IP/mês x ${qty} uni = $${baseNetworkMonthlyCost.toFixed(2)} USD`
-      );
-    } else if (item.networkType === 'nat' || textDesc.includes('nat') || textDesc.includes('gateway')) {
-      const natGatewayRate = 32.85 * regionMultiplier; // $0.045/hr * 730h
-      const dataRate = 0.045 * regionMultiplier;
-      const dataProcessedGB = item.egressGB || 0;
-      const dataCost = dataProcessedGB * dataRate;
-      baseNetworkMonthlyCost = (natGatewayRate + dataCost) * qty;
-      skuReferences.push(`Network SKU: Cloud NAT Gateway ($${natGatewayRate.toFixed(2)}/mês + $${dataRate.toFixed(3)}/GB)`);
-      auditFormulaSteps.push(
-        `6. Rede - Cloud NAT Gateway:`,
-        `   • Gateway Fee: $${natGatewayRate.toFixed(2)}/mês x ${qty} uni`,
-        `   • Dados Processados: ${dataProcessedGB} GB x $${dataRate.toFixed(3)}/GB = $${(dataCost * qty).toFixed(2)} USD`,
-        `   • Subtotal Cloud NAT = $${baseNetworkMonthlyCost.toFixed(2)} USD`
-      );
-    } else if (item.networkType === 'load_balancer' || textDesc.includes('load balancer') || textDesc.includes('balanceador') || textDesc.includes('forwarding rule') || textDesc.includes('alb')) {
-      const lbRuleRate = 18.25 * regionMultiplier; // $0.025/hr * 730h
-      const lbDataRate = 0.008 * regionMultiplier;
-      const dataGB = item.egressGB || 0;
-      const dataCost = dataGB * lbDataRate;
-      baseNetworkMonthlyCost = (lbRuleRate + dataCost) * qty;
-      skuReferences.push(`Network SKU: Cloud Load Balancing (Forwarding Rule $${lbRuleRate.toFixed(2)}/mês + $${lbDataRate.toFixed(3)}/GB)`);
-      auditFormulaSteps.push(
-        `6. Rede - Cloud Load Balancing:`,
-        `   • Forwarding Rules (Regras de Encaminhamento): $${lbRuleRate.toFixed(2)}/mês x ${qty} uni`,
-        `   • Processamento de Tráfego: ${dataGB} GB x $${lbDataRate.toFixed(3)}/GB = $${(dataCost * qty).toFixed(2)} USD`,
-        `   • Subtotal Load Balancer = $${baseNetworkMonthlyCost.toFixed(2)} USD`
-      );
-    } else if (item.networkType === 'vpn' || textDesc.includes('vpn') || textDesc.includes('tunnel')) {
-      const vpnRate = 36.50 * regionMultiplier; // $0.05/hr * 730h
-      baseNetworkMonthlyCost = vpnRate * qty;
-      skuReferences.push(`Network SKU: Cloud HA VPN Tunnel ($${vpnRate.toFixed(2)}/túnel/mês)`);
-      auditFormulaSteps.push(
-        `6. Rede - Cloud HA VPN:`,
-        `   • 1 Túnel VPN x $${vpnRate.toFixed(2)}/mês x ${qty} uni = $${baseNetworkMonthlyCost.toFixed(2)} USD`
-      );
+    const nt = item.networkType || 'egress';
+    const idx = rates.compute;
+    if (nt === 'ip') {
+      const n = item.ipCount || 1;
+      const rate = item.unitCostUSD ?? NETWORK.externalIpMonthlyUSD;
+      baseNetworkMonthlyCost = n * rate * qty;
+      skuRefs.push(`IPv4 externo em uso: ${usd(rate)}/IP·mês`);
+      steps.push(`IP externo: ${n} × ${usd(rate)} × ${qty} = ${usd(baseNetworkMonthlyCost)}`);
+    } else if (nt === 'nat') {
+      const gw = NETWORK.natGatewayMonthlyUSD * idx;
+      const gb = item.egressGB || 0;
+      const data = gb * NETWORK.natDataGBUSD * idx;
+      baseNetworkMonthlyCost = (gw + data) * qty;
+      skuRefs.push(`Cloud NAT: gateway ${usd(gw)}/mês + ${usd(NETWORK.natDataGBUSD * idx, 3)}/GB processado`);
+      steps.push(`Cloud NAT: (${usd(gw)} + ${gb} GB × ${usd(NETWORK.natDataGBUSD * idx, 3)}) × ${qty} = ${usd(baseNetworkMonthlyCost)}`);
+    } else if (nt === 'load_balancer') {
+      const rule = NETWORK.lbForwardingRuleMonthlyUSD * idx;
+      const gb = item.egressGB || 0;
+      const data = gb * NETWORK.lbDataGBUSD * idx;
+      baseNetworkMonthlyCost = (rule + data) * qty;
+      skuRefs.push(`Cloud Load Balancing: regra ${usd(rule)}/mês + ${usd(NETWORK.lbDataGBUSD * idx, 3)}/GB processado`);
+      steps.push(`Load Balancer: (${usd(rule)} + ${gb} GB × ${usd(NETWORK.lbDataGBUSD * idx, 3)}) × ${qty} = ${usd(baseNetworkMonthlyCost)}`);
+    } else if (nt === 'vpn') {
+      const rate = NETWORK.vpnTunnelMonthlyUSD * idx;
+      baseNetworkMonthlyCost = rate * qty;
+      skuRefs.push(`Cloud VPN: ${usd(rate)}/túnel·mês`);
+      steps.push(`Cloud VPN: ${qty} túnel(is) × ${usd(rate)} = ${usd(baseNetworkMonthlyCost)}`);
+    } else if (item.unitCostUSD && !item.egressGB) {
+      baseNetworkMonthlyCost = item.unitCostUSD * qty;
+      skuRefs.push(`Serviço de rede com valor mensal informado: ${usd(item.unitCostUSD)}`);
+      steps.push(`Rede (valor informado): ${usd(item.unitCostUSD)} × ${qty} = ${usd(baseNetworkMonthlyCost)}`);
     } else {
-      // General Egress / Data Transfer
-      const egressGB = item.egressGB || (item.unitCostUSD ? 0 : 100);
-      const egressRate = item.unitCostUSD ?? pricing.egressGBUSD;
-      if (item.unitCostUSD && !item.egressGB) {
-        baseNetworkMonthlyCost = item.unitCostUSD * qty;
-        skuReferences.push(`Network SKU: Tráfego/Rede Personalizado ($${item.unitCostUSD.toFixed(2)}/mês)`);
-        auditFormulaSteps.push(
-          `6. Rede - Tráfego / Serviço de Rede:`,
-          `   • Valor Mensal = $${baseNetworkMonthlyCost.toFixed(2)} USD`
-        );
-      } else {
-        baseNetworkMonthlyCost = egressGB * egressRate * qty;
-        skuReferences.push(`Network SKU: Premium Internet Egress ($${egressRate.toFixed(3)}/GB)`);
-        auditFormulaSteps.push(
-          `6. Rede - Tráfego de Saída (Internet Egress):`,
-          `   • ${egressGB} GB x $${egressRate.toFixed(3)}/GB x ${qty} uni = $${baseNetworkMonthlyCost.toFixed(2)} USD`
-        );
-      }
+      const gb = item.egressGB ?? 100;
+      const rate = item.unitCostUSD ?? rates.egressGBUSD;
+      baseNetworkMonthlyCost = gb * rate * qty;
+      skuRefs.push(`Egress internet (Premium Tier, estimativa): ${usd(rate, 3)}/GB`);
+      steps.push(`Egress: ${gb} GB × ${usd(rate, 3)} × ${qty} = ${usd(baseNetworkMonthlyCost)}`);
     }
   }
 
-  // Gross Total Monthly
   const grossMonthlyCost = baseComputeMonthlyCost + baseDiskMonthlyCost + baseStorageMonthlyCost + baseDatabaseMonthlyCost + baseNetworkMonthlyCost;
 
-  // Determine CUD Eligibility
-  const isCudEligible = (item.serviceType === 'compute' || item.serviceType === 'sql' || item.serviceType === 'gke') && category !== 'NETWORK' && category !== 'STORAGE';
-  const eligibleCudBase = baseComputeMonthlyCost + baseDatabaseMonthlyCost;
+  // ---------- Cenários ----------
+  const isCudEligible = isComputeLike || item.serviceType === 'sql';
+  const sudAmount = baseComputeMonthlyCost * sudRate;
+  const computedPayg = grossMonthlyCost - sudAmount;
+  const cudRates = item.serviceType === 'sql' ? CUD_RATES.sql : CUD_RATES.compute;
+  const cudBase = isComputeLike ? baseComputeMonthlyCost : baseDatabaseMonthlyCost;
+  // CUD substitui o SUD (não acumulam); só vale a pena se o desconto do CUD superar o SUD
+  const computedCud1 = isCudEligible ? Math.min(computedPayg, grossMonthlyCost - cudBase * cudRates.cud_1yr) : computedPayg;
+  const computedCud3 = isCudEligible ? Math.min(computedPayg, grossMonthlyCost - cudBase * cudRates.cud_3yr) : computedPayg;
 
-  // Calculate 3 Side-by-Side Scenarios
-  let paygCostMonthly = grossMonthlyCost;
-  let cud1yrCostMonthly = grossMonthlyCost;
-  let cud3yrCostMonthly = grossMonthlyCost;
+  const usesImportedPrices = item.customPaygUSD !== undefined || item.customCud1yrUSD !== undefined || item.customCud3yrUSD !== undefined;
+  const paygCostMonthly = item.customPaygUSD ?? computedPayg;
+  // Se só o PAYG foi importado, os cenários CUD mantêm a mesma proporção calculada pelo motor
+  const ratio = (v: number) => (computedPayg > 0 ? v / computedPayg : 1);
+  const cud1yrCostMonthly = item.customCud1yrUSD ?? (item.customPaygUSD !== undefined ? paygCostMonthly * ratio(computedCud1) : computedCud1);
+  const cud3yrCostMonthly = item.customCud3yrUSD ?? (item.customPaygUSD !== undefined ? paygCostMonthly * ratio(computedCud3) : computedCud3);
 
-  if (item.customPaygUSD !== undefined) {
-    paygCostMonthly = item.customPaygUSD;
-  } else {
-    // Standard PAYG includes SUD (~20%) if compute usage is full month (730 hrs)
-    if (hours >= 730 && (item.serviceType === 'compute' || item.serviceType === 'gke')) {
-      paygCostMonthly = grossMonthlyCost - (baseComputeMonthlyCost * SUD_FULL_MONTH_DISCOUNT);
-    }
+  if (sudRate > 0) steps.push(`SUD automático (${(sudRate * 100).toFixed(1)}% sobre compute): −${usd(sudAmount)}`);
+  if (isCudEligible) {
+    steps.push(
+      `CUD 1 ano (${(cudRates.cud_1yr * 100).toFixed(0)}% sobre ${isComputeLike ? 'vCPU/RAM' : 'instância'}): ${usd(computedCud1)}`,
+      `CUD 3 anos (${(cudRates.cud_3yr * 100).toFixed(0)}%): ${usd(computedCud3)}`,
+    );
   }
-
-  if (item.customCud1yrUSD !== undefined) {
-    cud1yrCostMonthly = item.customCud1yrUSD;
-  } else if (isCudEligible) {
-    const cud1Rate = item.serviceType === 'sql' ? 0.25 : CUD_DISCOUNTS.cud_1yr; // ~25% for SQL, ~37% for Compute
-    cud1yrCostMonthly = grossMonthlyCost - (eligibleCudBase * cud1Rate);
-  }
-
-  if (item.customCud3yrUSD !== undefined) {
-    cud3yrCostMonthly = item.customCud3yrUSD;
-  } else if (isCudEligible) {
-    const cud3Rate = item.serviceType === 'sql' ? 0.52 : CUD_DISCOUNTS.cud_3yr; // ~52% for SQL, ~55% for Compute
-    cud3yrCostMonthly = grossMonthlyCost - (eligibleCudBase * cud3Rate);
-  }
-
-  const cud1yrSavingsMonthly = Math.max(0, paygCostMonthly - cud1yrCostMonthly);
-  const cud3yrSavingsMonthly = Math.max(0, paygCostMonthly - cud3yrCostMonthly);
-
-  // Active Selected Discount Scenario
-  let discountPercentage = 0;
-  let discountDescription = 'Nenhum desconto aplicado (PAYG)';
-  let netMonthlyCost = paygCostMonthly;
+  if (usesImportedPrices) steps.push('Atenção: há valores importados da planilha sobrepondo o cálculo do motor.');
 
   const discountType: DiscountType = item.discountType || 'none';
-
-  if (discountType === 'cud_3yr') {
-    netMonthlyCost = cud3yrCostMonthly;
-    discountPercentage = isCudEligible ? (paygCostMonthly > 0 ? (paygCostMonthly - cud3yrCostMonthly) / paygCostMonthly : 0) : 0;
-    discountDescription = 'Committed Use Discount (CUD 3 Anos)';
-  } else if (discountType === 'cud_1yr') {
+  let netMonthlyCost = paygCostMonthly;
+  let discountDescription = sudRate > 0 ? 'On-demand com SUD automático' : 'On-demand (PAYG)';
+  if (discountType === 'cud_1yr') {
     netMonthlyCost = cud1yrCostMonthly;
-    discountPercentage = isCudEligible ? (paygCostMonthly > 0 ? (paygCostMonthly - cud1yrCostMonthly) / paygCostMonthly : 0) : 0;
-    discountDescription = 'Committed Use Discount (CUD 1 Ano)';
-  } else if (discountType === 'spot') {
-    discountPercentage = CUD_DISCOUNTS.spot;
-    netMonthlyCost = grossMonthlyCost - (baseComputeMonthlyCost * CUD_DISCOUNTS.spot);
-    discountDescription = 'Spot / Preemptible (~70% Desconto)';
-  } else {
-    netMonthlyCost = paygCostMonthly;
-    discountDescription = hours >= 730 && (item.serviceType === 'compute' || item.serviceType === 'gke') 
-      ? 'Sustained Use Discount (SUD Automático)' 
-      : 'Pay-As-You-Go / On-Demand';
+    discountDescription = 'Committed Use Discount 1 ano';
+  } else if (discountType === 'cud_3yr') {
+    netMonthlyCost = cud3yrCostMonthly;
+    discountDescription = 'Committed Use Discount 3 anos';
+  } else if (discountType === 'spot' && isComputeLike) {
+    netMonthlyCost = grossMonthlyCost - baseComputeMonthlyCost * SPOT_DISCOUNT;
+    discountDescription = `Spot VM (~${SPOT_DISCOUNT * 100}% sobre compute)`;
   }
 
-  const discountAmountMonthly = Math.max(0, grossMonthlyCost - netMonthlyCost);
-  const netAnnualCost = netMonthlyCost * 12;
-
-  // Metadata Display Helpers
-  const originalResourceName = item.originalResourceName || item.name;
-  
+  // ---------- Metadados de exibição ----------
   let gcpProductSuggested = item.gcpProductSuggested || '';
   if (!gcpProductSuggested || (item.isDatabaseWorkload && item.serviceType === 'compute')) {
-    if (item.serviceType === 'compute' && item.isDatabaseWorkload) gcpProductSuggested = 'Compute Engine (Banco em VM)';
+    if (item.serviceType === 'compute' && item.isDatabaseWorkload) gcpProductSuggested = 'Compute Engine (banco em VM)';
+    else if (item.serviceType === 'gke') gcpProductSuggested = 'Google Kubernetes Engine';
+    else if (item.serviceType === 'sql') gcpProductSuggested = `Cloud SQL for ${engineName(item.dbEngine)}`;
     else if (category === 'COMPUTE') gcpProductSuggested = 'Compute Engine';
-    else if (category === 'DATABASE' || item.serviceType === 'sql') gcpProductSuggested = `Cloud SQL (${item.dbEngine || 'MySQL'})`;
-    else if (category === 'STORAGE') gcpProductSuggested = item.serviceType === 'storage' ? 'Cloud Storage' : 'Persistent Disk';
-    else if (category === 'NETWORK') {
-      if (item.networkType === 'nat') gcpProductSuggested = 'Cloud NAT';
-      else if (item.networkType === 'load_balancer') gcpProductSuggested = 'Cloud Load Balancing';
-      else if (item.networkType === 'vpn') gcpProductSuggested = 'Cloud HA VPN';
-      else if (item.ipCount) gcpProductSuggested = 'VPC External IP';
-      else gcpProductSuggested = 'Network Data Transfer';
-    }
+    else if (item.serviceType === 'storage') gcpProductSuggested = 'Cloud Storage';
+    else if (category === 'STORAGE') gcpProductSuggested = 'Persistent Disk';
+    else if (category === 'NETWORK') gcpProductSuggested = networkProduct(item.networkType);
     else if (category === 'CDN') gcpProductSuggested = 'Cloud CDN';
-    else gcpProductSuggested = 'Google Cloud Infrastructure';
+    else gcpProductSuggested = 'Google Cloud';
   }
 
-  let skuDetails = item.skuDetails || '';
-  if (!skuDetails || (item.isDatabaseWorkload && item.serviceType === 'compute')) {
-    if (item.serviceType === 'compute') {
-      const diskInfo = item.bootDiskGB ? ` | ${item.bootDiskType || 'pd-balanced'} ${item.bootDiskGB}GB` : '';
-      skuDetails = `${item.machineType || 'e2-standard-2'} (${vcpus} vCPU / ${ramGB} GB RAM${diskInfo})`;
-    }
-    else if (category === 'DATABASE' || item.serviceType === 'sql') skuDetails = `${item.dbTier || 'db-custom-2-8192'} (${item.dbEngine || 'MySQL'}${item.highAvailability ? ', HA Multi-Zone' : ''})`;
-    else if (category === 'STORAGE') skuDetails = item.bootDiskGB ? `${item.bootDiskType || 'pd-balanced'} (${item.bootDiskGB} GB)` : 'Standard Storage';
-    else if (category === 'NETWORK') {
-      if (item.ipCount) skuDetails = `${item.ipCount} Endereço(s) IPv4 Externo`;
-      else if (item.networkType === 'nat') skuDetails = 'Cloud NAT Gateway + Tráfego';
-      else if (item.networkType === 'load_balancer') skuDetails = 'Forwarding Rules + Tráfego';
-      else skuDetails = `${item.egressGB || 100} GB Internet Egress`;
-    }
-    else skuDetails = item.name;
-  }
-
-  const technicalNotes = item.technicalNotes || '';
+  let skuDetails = '';
+  if (isComputeLike) skuDetails = spec ? spec.name : `custom ${vcpus} vCPU / ${ramGB} GB`;
+  else if (item.serviceType === 'sql') skuDetails = item.dbTier || 'db-custom-2-8192';
+  else if (item.serviceType === 'disk') skuDetails = item.bootDiskType || 'pd-balanced';
+  else if (item.serviceType === 'storage') skuDetails = `Bucket ${item.storageClass || 'standard'}`;
+  else skuDetails = item.skuDetails || item.name;
 
   return {
     item,
     category,
-    originalResourceName,
+    originalResourceName: item.originalResourceName || item.name,
     gcpProductSuggested,
     skuDetails,
-    technicalNotes,
-    
+    technicalNotes: item.technicalNotes || '',
     paygCostMonthly,
     cud1yrCostMonthly,
     cud3yrCostMonthly,
-    cud1yrSavingsMonthly,
-    cud3yrSavingsMonthly,
-    
+    cud1yrSavingsMonthly: Math.max(0, paygCostMonthly - cud1yrCostMonthly),
+    cud3yrSavingsMonthly: Math.max(0, paygCostMonthly - cud3yrCostMonthly),
+    grossMonthlyCost,
+    netMonthlyCost,
+    netAnnualCost: netMonthlyCost * 12,
+    baseComputeMonthlyCost,
+    baseDiskMonthlyCost,
+    baseStorageMonthlyCost,
+    baseDatabaseMonthlyCost,
+    baseNetworkMonthlyCost,
+    discountPercentage: grossMonthlyCost > 0 ? Math.max(0, (grossMonthlyCost - netMonthlyCost) / grossMonthlyCost) : 0,
+    discountAmountMonthly: Math.max(0, grossMonthlyCost - netMonthlyCost),
+    discountDescription,
+    isCudEligible,
+    usesImportedPrices,
     vcpuRate,
     ramRate,
     bootDiskRate,
     additionalDiskRate,
     osRate,
     serviceBaseRate: grossMonthlyCost,
-    baseComputeMonthlyCost,
-    baseDiskMonthlyCost,
-    baseStorageMonthlyCost,
-    baseDatabaseMonthlyCost,
-    baseNetworkMonthlyCost,
-    grossMonthlyCost,
-    discountPercentage,
-    discountAmountMonthly,
-    discountDescription,
-    netMonthlyCost,
-    netAnnualCost,
-    isCudEligible,
-    auditFormulaSteps,
-    skuReferences,
-    matchingConfidence: 99.8,
+    auditFormulaSteps: steps.filter(Boolean),
+    skuReferences: skuRefs,
   };
+}
+
+export function engineName(engine?: string): string {
+  if (engine === 'POSTGRES') return 'PostgreSQL';
+  if (engine === 'SQLSERVER') return 'SQL Server';
+  return 'MySQL';
+}
+
+function networkProduct(nt?: string): string {
+  switch (nt) {
+    case 'nat': return 'Cloud NAT';
+    case 'load_balancer': return 'Cloud Load Balancing';
+    case 'vpn': return 'Cloud VPN';
+    case 'ip': return 'IP externo (VPC)';
+    default: return 'Transferência de dados';
+  }
 }
 
 export function calculateSummary(
   calculatedItems: CalculatedCostItem[],
   currency: 'USD' | 'BRL' = 'USD',
-  exchangeRateBRL: number = 5.50
+  exchangeRateBRL = 5.5,
 ): CalculatorSummary {
-  let totalPaygMonthlyUSD = 0;
-  let totalCud1yrMonthlyUSD = 0;
-  let totalCud3yrMonthlyUSD = 0;
-  let totalNetMonthlyUSD = 0;
-
-  calculatedItems.forEach((calc) => {
-    totalPaygMonthlyUSD += calc.paygCostMonthly;
-    totalCud1yrMonthlyUSD += calc.cud1yrCostMonthly;
-    totalCud3yrMonthlyUSD += calc.cud3yrCostMonthly;
-    totalNetMonthlyUSD += calc.netMonthlyCost;
+  let payg = 0;
+  let cud1 = 0;
+  let cud3 = 0;
+  let net = 0;
+  calculatedItems.forEach((c) => {
+    payg += c.paygCostMonthly;
+    cud1 += c.cud1yrCostMonthly;
+    cud3 += c.cud3yrCostMonthly;
+    net += c.netMonthlyCost;
   });
-
-  const totalCud1yrSavingsUSD = Math.max(0, totalPaygMonthlyUSD - totalCud1yrMonthlyUSD);
-  const totalCud3yrSavingsUSD = Math.max(0, totalPaygMonthlyUSD - totalCud3yrMonthlyUSD);
-  const totalCud1yrSavingsPct = totalPaygMonthlyUSD > 0 ? (totalCud1yrSavingsUSD / totalPaygMonthlyUSD) * 100 : 0;
-  const totalCud3yrSavingsPct = totalPaygMonthlyUSD > 0 ? (totalCud3yrSavingsUSD / totalPaygMonthlyUSD) * 100 : 0;
-
+  const s1 = Math.max(0, payg - cud1);
+  const s3 = Math.max(0, payg - cud3);
   return {
     totalItems: calculatedItems.length,
-    totalPaygMonthlyUSD,
-    totalCud1yrMonthlyUSD,
-    totalCud3yrMonthlyUSD,
-    totalCud1yrSavingsUSD,
-    totalCud3yrSavingsUSD,
-    totalCud1yrSavingsPct,
-    totalCud3yrSavingsPct,
-    totalNetMonthlyUSD,
-    totalNetAnnualUSD: totalNetMonthlyUSD * 12,
-    wellArchitectedOptimizedNetMonthlyUSD: totalCud3yrMonthlyUSD,
-    wellArchitectedOptimizedNetAnnualUSD: totalCud3yrMonthlyUSD * 12,
+    totalPaygMonthlyUSD: payg,
+    totalCud1yrMonthlyUSD: cud1,
+    totalCud3yrMonthlyUSD: cud3,
+    totalCud1yrSavingsUSD: s1,
+    totalCud3yrSavingsUSD: s3,
+    totalCud1yrSavingsPct: payg > 0 ? (s1 / payg) * 100 : 0,
+    totalCud3yrSavingsPct: payg > 0 ? (s3 / payg) * 100 : 0,
+    totalNetMonthlyUSD: net,
+    totalNetAnnualUSD: net * 12,
     currency,
     exchangeRateBRL,
   };

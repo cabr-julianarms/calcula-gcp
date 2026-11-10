@@ -1,7 +1,8 @@
 import React from 'react';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, Cell } from 'recharts';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell, CartesianGrid, TooltipProps } from 'recharts';
 import { CalculatedCostItem, CalculatorSummary } from '../types/gcp';
-import { formatCurrency } from '../utils/formatters';
+import { formatCurrency, formatCompact } from '../utils/formatters';
+import { CATEGORY_LABELS } from './ui';
 
 interface CostDashboardProps {
   calculatedItems: CalculatedCostItem[];
@@ -10,118 +11,97 @@ interface CostDashboardProps {
   exchangeRateBRL: number;
 }
 
-export const CostDashboard: React.FC<CostDashboardProps> = ({
-  calculatedItems,
-  summary,
-  currency,
-  exchangeRateBRL,
-}) => {
-  const mult = currency === 'BRL' ? exchangeRateBRL : 1.0;
-  const format = (amountUSD: number) => formatCurrency(amountUSD, currency, exchangeRateBRL);
+const COLORS = { payg: '#cbd5e1', cud1: '#38bdf8', cud3: '#34d399' };
+const AXIS = { stroke: '#6b7a90', fontSize: 11 };
 
-  // 1. Service Category Breakdown Data
-  const categoryMap: Record<string, { payg: number; cud1y: number; cud3y: number }> = {};
-  calculatedItems.forEach((calc) => {
-    const key = calc.category;
-    if (!categoryMap[key]) {
-      categoryMap[key] = { payg: 0, cud1y: 0, cud3y: 0 };
-    }
-    categoryMap[key].payg += calc.paygCostMonthly;
-    categoryMap[key].cud1y += calc.cud1yrCostMonthly;
-    categoryMap[key].cud3y += calc.cud3yrCostMonthly;
-  });
+export const CostDashboard: React.FC<CostDashboardProps> = ({ calculatedItems, summary, currency, exchangeRateBRL }) => {
+  if (calculatedItems.length === 0) return null;
+  const mult = currency === 'BRL' ? exchangeRateBRL : 1;
+  const f = (usd: number) => formatCurrency(usd, currency, exchangeRateBRL);
+  const axisFmt = (v: number) => formatCompact(v, currency);
 
-  const categoryChartData = Object.entries(categoryMap).map(([name, vals]) => ({
-    name,
-    PAYG: +(vals.payg * mult).toFixed(2),
-    'CUD 1 Ano': +(vals.cud1y * mult).toFixed(2),
-    'CUD 3 Anos': +(vals.cud3y * mult).toFixed(2),
-  }));
-
-  // 2. Scenario Totals Comparison
-  const scenarioData = [
-    {
-      name: 'Sem Commit (PAYG)',
-      Custo: +(summary.totalPaygMonthlyUSD * mult).toFixed(2),
-      rawUSD: summary.totalPaygMonthlyUSD,
-      fill: '#94a3b8',
-    },
-    {
-      name: 'Commit 1 Ano',
-      Custo: +(summary.totalCud1yrMonthlyUSD * mult).toFixed(2),
-      rawUSD: summary.totalCud1yrMonthlyUSD,
-      fill: '#38bdf8',
-    },
-    {
-      name: 'Commit 3 Anos',
-      Custo: +(summary.totalCud3yrMonthlyUSD * mult).toFixed(2),
-      rawUSD: summary.totalCud3yrMonthlyUSD,
-      fill: '#34d399',
-    },
+  const scenarios = [
+    { name: 'Sob demanda', value: summary.totalPaygMonthlyUSD * mult, color: COLORS.payg },
+    { name: 'CUD 1 ano', value: summary.totalCud1yrMonthlyUSD * mult, color: COLORS.cud1 },
+    { name: 'CUD 3 anos', value: summary.totalCud3yrMonthlyUSD * mult, color: COLORS.cud3 },
   ];
 
-  if (calculatedItems.length === 0) return null;
+  const byCat: Record<string, { payg: number; cud1: number; cud3: number }> = {};
+  calculatedItems.forEach((c) => {
+    const k = c.category;
+    byCat[k] = byCat[k] || { payg: 0, cud1: 0, cud3: 0 };
+    byCat[k].payg += c.paygCostMonthly * mult;
+    byCat[k].cud1 += c.cud1yrCostMonthly * mult;
+    byCat[k].cud3 += c.cud3yrCostMonthly * mult;
+  });
+  const categoryData = Object.entries(byCat)
+    .map(([k, v]) => ({ name: CATEGORY_LABELS[k] || k, ...v }))
+    .sort((a, b) => b.payg - a.payg);
+
+  const tooltip = (labels: Record<string, string>) =>
+    ({ active, payload, label }: TooltipProps<number, string>) => {
+      if (!active || !payload?.length) return null;
+      return (
+        <div className="chart-tooltip">
+          <div className="t">{label}</div>
+          {payload.map((p) => (
+            <div className="row" key={String(p.dataKey)}>
+              <span className="dot" style={{ background: p.payload?.color || p.color }} />
+              {labels[String(p.dataKey)] || ''} {f((p.value || 0) / mult)}
+            </div>
+          ))}
+        </div>
+      );
+    };
 
   return (
-    <div className="glass-panel" style={{ padding: '20px', marginBottom: '24px' }}>
-      <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '16px' }}>
-        Análise Gráfica de Custos & Cenários de Desconto
-      </h3>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
-        
-        {/* Chart 1: Scenario Comparison */}
-        <div style={{ background: 'rgba(15, 23, 42, 0.4)', padding: '16px', borderRadius: 'var(--radius-md)' }}>
-          <h4 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-            Comparativo de Custo Total Mensal (PAYG vs CUD 1Y vs CUD 3Y)
-          </h4>
-          <div style={{ width: '100%', height: 230 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={scenarioData}>
-                <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={11} />
-                <YAxis stroke="var(--text-secondary)" fontSize={11} />
-                <Tooltip
-                  formatter={(val: number) => [
-                    currency === 'BRL' ? `R$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : `$ ${val.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-                    'Custo Mensal'
-                  ]}
-                />
-                <Bar dataKey="Custo" radius={[6, 6, 0, 0]}>
-                  {scenarioData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.fill} />
-                  ))}
+    <section className="panel" aria-labelledby="dash-title">
+      <div className="panel-head">
+        <div>
+          <h2 className="panel-title" id="dash-title">Análise de custos</h2>
+          <p className="panel-sub">Total anual sob demanda: <strong className="num">{f(summary.totalPaygMonthlyUSD * 12)}</strong> · com CUD 3 anos: <strong className="num" style={{ color: 'var(--cud3)' }}>{f(summary.totalCud3yrMonthlyUSD * 12)}</strong></p>
+        </div>
+      </div>
+      <div className="grid-2">
+        <div className="chart-box">
+          <h4>Custo mensal por cenário</h4>
+          <div style={{ width: '100%', height: 240 }}>
+            <ResponsiveContainer>
+              <BarChart data={scenarios} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="rgba(148,163,184,0.12)" />
+                <XAxis dataKey="name" {...AXIS} tickLine={false} axisLine={false} />
+                <YAxis {...AXIS} tickFormatter={axisFmt} tickLine={false} axisLine={false} width={64} />
+                <Tooltip cursor={{ fill: 'rgba(148,163,184,0.08)' }} content={tooltip({ value: '' })} />
+                <Bar dataKey="value" radius={[6, 6, 0, 0]} maxBarSize={90}>
+                  {scenarios.map((s) => <Cell key={s.name} fill={s.color} />)}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Chart 2: Category Breakdown across 3 Scenarios */}
-        <div style={{ background: 'rgba(15, 23, 42, 0.4)', padding: '16px', borderRadius: 'var(--radius-md)' }}>
-          <h4 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-            Distribuição por Categoria de Recurso
-          </h4>
-          <div style={{ width: '100%', height: 230 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={categoryChartData}>
-                <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={11} />
-                <YAxis stroke="var(--text-secondary)" fontSize={11} />
-                <Tooltip
-                  formatter={(val: number) => [
-                    currency === 'BRL' ? `R$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : `$ ${val.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-                    'Custo Mensal'
-                  ]}
-                />
-                <Legend />
-                <Bar dataKey="PAYG" fill="#94a3b8" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="CUD 1 Ano" fill="#38bdf8" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="CUD 3 Anos" fill="#34d399" radius={[4, 4, 0, 0]} />
+        <div className="chart-box">
+          <h4>Custo mensal por categoria</h4>
+          <div style={{ width: '100%', height: 240 }}>
+            <ResponsiveContainer>
+              <BarChart data={categoryData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="rgba(148,163,184,0.12)" />
+                <XAxis dataKey="name" {...AXIS} tickLine={false} axisLine={false} interval={0} />
+                <YAxis {...AXIS} tickFormatter={axisFmt} tickLine={false} axisLine={false} width={64} />
+                <Tooltip cursor={{ fill: 'rgba(148,163,184,0.08)' }} content={tooltip({ payg: 'Sob demanda:', cud1: 'CUD 1 ano:', cud3: 'CUD 3 anos:' })} />
+                <Bar dataKey="payg" fill={COLORS.payg} radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="cud1" fill={COLORS.cud1} radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="cud3" fill={COLORS.cud3} radius={[4, 4, 0, 0]} maxBarSize={28} />
               </BarChart>
             </ResponsiveContainer>
           </div>
+          <div className="legend">
+            <span><i style={{ background: COLORS.payg }} />Sob demanda</span>
+            <span><i style={{ background: COLORS.cud1 }} />CUD 1 ano</span>
+            <span><i style={{ background: COLORS.cud3 }} />CUD 3 anos</span>
+          </div>
         </div>
-
       </div>
-    </div>
+    </section>
   );
 };

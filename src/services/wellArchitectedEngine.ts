@@ -1,165 +1,455 @@
-import { CalculatedCostItem, WellArchitectedRecommendation } from '../types/gcp';
-import { MACHINE_SPECS_CATALOG } from '../data/gcpPricingCatalog';
+import { CalculatedCostItem, InventoryItem, WafPillar, WellArchitectedRecommendation } from '../types/gcp';
+import { calculateItemCost } from './pricingEngine';
+import { getMachineSpec, sqlTierFor, SNAPSHOT_GB_MONTHLY_USD, CUD_RATES } from '../data/gcpPricingCatalog';
+import { getRegion, regionLabel } from '../data/regions';
 
 /**
- * Motor de Recomendações baseado no Google Cloud Architecture Framework
- * Pilares Oficiais:
- *  - Cost Optimization (Otimização de Custos)
- *  - Performance (Otimização de Desempenho)
- *  - Reliability (Confiabilidade e Resiliência)
- *  - Operational Excellence (Excelência Operacional)
+ * Motor de recomendações baseado no Google Cloud Well-Architected Framework.
+ * https://cloud.google.com/architecture/framework
+ *
+ * Toda variação de custo é calculada pelo próprio motor de preços (antes × depois),
+ * nunca por percentuais fixos — assim a recomendação é sempre coerente com a tabela.
  */
-export function generateWellArchitectedRecommendations(
-  calculatedItems: CalculatedCostItem[]
-): WellArchitectedRecommendation[] {
-  const recommendations: WellArchitectedRecommendation[] = [];
 
-  calculatedItems.forEach(({ item, netMonthlyCost, baseComputeMonthlyCost, baseDiskMonthlyCost }) => {
-    const computeBaseCost = baseComputeMonthlyCost || netMonthlyCost;
-    const diskBaseCost = baseDiskMonthlyCost || 0;
+export const PILLARS: Record<WafPillar, { label: string; short: string; url: string; color: string }> = {
+  operational_excellence: {
+    label: 'Excelência operacional',
+    short: 'Operacional',
+    url: 'https://cloud.google.com/architecture/framework/operational-excellence',
+    color: '#a78bfa',
+  },
+  security: {
+    label: 'Segurança, privacidade e conformidade',
+    short: 'Segurança',
+    url: 'https://cloud.google.com/architecture/framework/security',
+    color: '#f87171',
+  },
+  reliability: {
+    label: 'Confiabilidade',
+    short: 'Confiabilidade',
+    url: 'https://cloud.google.com/architecture/framework/reliability',
+    color: '#fbbf24',
+  },
+  cost: {
+    label: 'Otimização de custos',
+    short: 'Custos',
+    url: 'https://cloud.google.com/architecture/framework/cost-optimization',
+    color: '#34d399',
+  },
+  performance: {
+    label: 'Otimização de desempenho',
+    short: 'Desempenho',
+    url: 'https://cloud.google.com/architecture/framework/performance-optimization',
+    color: '#60a5fa',
+  },
+  sustainability: {
+    label: 'Sustentabilidade',
+    short: 'Sustentabilidade',
+    url: 'https://cloud.google.com/architecture/framework/sustainability',
+    color: '#4ade80',
+  },
+};
 
-    // 1. [Pilar Cost Optimization & Performance] Modernização de Família de VM (N1 legada -> N2D / E2)
-    if (item.serviceType === 'compute' && item.machineType) {
-      const currentType = item.machineType.toLowerCase();
-      const spec = MACHINE_SPECS_CATALOG[currentType];
+export const PILLAR_ORDER: WafPillar[] = ['cost', 'reliability', 'performance', 'security', 'operational_excellence', 'sustainability'];
 
-      if (spec && spec.generation === 'legacy' && spec.family === 'n1') {
-        const potentialSavings = computeBaseCost * 0.20; // ~20% economia ao migrar N1 -> N2D/E2
-        const suggestedType = currentType.replace('n1-', 'n2d-');
+const stripImported = (item: InventoryItem): InventoryItem => ({
+  ...item,
+  customPaygUSD: undefined,
+  customCud1yrUSD: undefined,
+  customCud3yrUSD: undefined,
+});
 
-        recommendations.push({
-          id: `rec-modern-${item.id}`,
-          itemId: item.id,
-          category: 'cost_optimization',
-          pillar: 'Performance',
-          title: `Modernizar Família de VM: ${item.name} (${item.machineType} ➔ ${suggestedType})`,
-          description: `A família N1 é de geração legada da GCP. A recomendação do Architecture Framework é modernizar para N2D (AMD EPYC) ou E2, garantindo maior desempenho por vCPU e redução de até 20% no custo computacional.`,
-          impact: 'MEDIUM',
-          potentialMonthlySavingsUSD: potentialSavings,
-          actionType: 'MODERNIZE_MACHINE',
-          recommendedMachineType: suggestedType,
+/** Variação mensal (on-demand) ao aplicar `patch` no item */
+function deltaFor(item: InventoryItem, patch: Partial<InventoryItem>): number {
+  const before = calculateItemCost(stripImported(item)).paygCostMonthly;
+  const after = calculateItemCost(stripImported({ ...item, ...patch })).paygCostMonthly;
+  return after - before;
+}
+
+function impactFromDelta(delta: number, fallback: 'HIGH' | 'MEDIUM' | 'LOW' = 'MEDIUM'): 'HIGH' | 'MEDIUM' | 'LOW' {
+  const saving = -delta;
+  if (saving >= 100) return 'HIGH';
+  if (saving >= 20) return 'MEDIUM';
+  if (saving > 0) return 'LOW';
+  return fallback;
+}
+
+const isNonProd = (env: string) => env === 'dev' || env === 'qa' || env === 'staging';
+
+/** Mapeia um machine type legado/compartilhado para o equivalente moderno de mesmo porte */
+function modernEquivalent(machineType: string): string | null {
+  const spec = getMachineSpec(machineType);
+  if (!spec || spec.family.id !== 'n1') return null;
+  const m = machineType.match(/^n1-(standard|highmem|highcpu)-(\d+)$/);
+  if (!m) return null;
+  const size = parseInt(m[2], 10);
+  const target = size === 1 ? 'e2-standard-2' : `n2d-${m[1]}-${size}`;
+  return getMachineSpec(target) ? target : `e2-${m[1]}-${size}`;
+}
+
+export function generateWellArchitectedRecommendations(calculated: CalculatedCostItem[]): WellArchitectedRecommendation[] {
+  const recs: WellArchitectedRecommendation[] = [];
+  const items = calculated.map((c) => c.item);
+
+  // ======================= Por item =======================
+  calculated.forEach((calc) => {
+    const { item } = calc;
+    const name = item.name;
+    const isVM = item.serviceType === 'compute';
+    const isProd = item.environment === 'prod';
+    const hours = item.usageHoursPerMonth ?? 730;
+    const spec = getMachineSpec(item.machineType);
+
+    // ---------- CUSTO: desligar ambientes não produtivos fora do expediente ----------
+    if (isVM && isNonProd(item.environment) && hours > 300 && item.discountType !== 'spot') {
+      const patch = { usageHoursPerMonth: 220 };
+      const delta = deltaFor(item, patch);
+      if (delta < -5) {
+        recs.push({
+          id: `cost-schedule-${item.id}`,
+          pillar: 'cost',
+          title: `Agendar desligamento fora do expediente — ${name}`,
+          description: `Ambiente ${item.environment.toUpperCase()} rodando ${hours} h/mês. Com um instance schedule (ex.: 10 h/dia em dias úteis ≈ 220 h/mês), você paga só pelo tempo em uso. Discos continuam sendo cobrados.`,
+          practice: 'Otimização de custos › Otimizar o uso de recursos: desligue recursos ociosos e use agendamentos para ambientes não produtivos.',
+          impact: impactFromDelta(delta),
+          monthlyDeltaUSD: delta,
+          affectedItemIds: [item.id],
+          targets: [{ itemId: item.id, patch }],
+          applyLabel: 'Aplicar 220 h/mês',
         });
       }
     }
 
-    // 2. [Pilar Performance & Cost] Otimização de Tipo de Disco Persistente (pd-balanced)
-    if (item.serviceType === 'compute' || item.serviceType === 'disk') {
-      const bootType = item.bootDiskType || 'pd-balanced';
-      const bootGB = item.bootDiskGB || 0;
-
-      // Alerta de Performance: HDD pd-standard em Produção
-      if (bootType === 'pd-standard' && item.environment === 'prod' && bootGB > 0) {
-        recommendations.push({
-          id: `rec-disk-perf-${item.id}`,
-          itemId: item.id,
-          category: 'performance',
-          pillar: 'Performance',
-          title: `Gargalo de I/O: Migrar Disco de Boot para SSD Balanceado (${item.name})`,
-          description: `Discos pd-standard (HDD) possuem limite baixo de IOPS e throughput, gerando lentidão no boot e no sistema operacional. A recomendação oficial é adotar pd-balanced (Balanced SSD) para produção.`,
-          impact: 'HIGH',
-          potentialMonthlySavingsUSD: 0,
-          actionType: 'OPTIMIZE_DISK',
-          recommendedDiskType: 'pd-balanced',
-        });
-      }
-
-      // Alerta de Custo: pd-ssd superdimensionado para workloads comuns
-      if (bootType === 'pd-ssd' && bootGB >= 100) {
-        const ssdRate = 0.17;
-        const balancedRate = 0.10;
-        const diskSavings = bootGB * (ssdRate - balancedRate) * (item.quantity || 1);
-
-        if (diskSavings > 5) {
-          recommendations.push({
-            id: `rec-disk-cost-${item.id}`,
-            itemId: item.id,
-            category: 'cost_optimization',
-            pillar: 'Cost Optimization',
-            title: `Reduzir Custo de Disco: Adotar pd-balanced em ${item.name}`,
-            description: `O disco SSD puro (pd-ssd) custa ~70% a mais. A GCP recomenda pd-balanced para a maioria dos workloads corporativos, oferecendo excelente IOPS e latência com menor custo.`,
-            impact: 'MEDIUM',
-            potentialMonthlySavingsUSD: diskSavings,
-            actionType: 'OPTIMIZE_DISK',
-            recommendedDiskType: 'pd-balanced',
-          });
-        }
-      }
-    }
-
-    // 3. [Pilar Cost Optimization] Ciclo de Vida de Armazenamento (Cloud Storage Lifecycle)
-    if (item.serviceType === 'storage' && item.storageGB && item.storageGB > 500) {
-      if (!item.storageClass || item.storageClass === 'standard') {
-        const currentCost = netMonthlyCost;
-        const nearlineCost = currentCost * 0.50; // Nearline é 50% mais econômico
-        const savings = currentCost - nearlineCost;
-
-        recommendations.push({
-          id: `rec-storage-${item.id}`,
-          itemId: item.id,
-          category: 'cost_optimization',
-          pillar: 'Cost Optimization',
-          title: `Lifecycle Policy no Bucket: ${item.name}`,
-          description: `O bucket possui ${item.storageGB} GB na classe Standard. Configurar uma regra de ciclo de vida para migrar objetos não acessados há mais de 30 dias para Nearline reduz o custo de storage em 50%.`,
-          impact: 'MEDIUM',
-          potentialMonthlySavingsUSD: savings,
-          actionType: 'STORAGE_LIFECYCLE',
-          recommendedStorageClass: 'nearline',
+    // ---------- CUSTO: Spot para staging tolerante a falhas ----------
+    if (isVM && item.environment === 'staging' && !item.isDatabaseWorkload && item.discountType !== 'spot') {
+      const before = calculateItemCost(stripImported(item)).paygCostMonthly;
+      const after = calculateItemCost(stripImported({ ...item, discountType: 'spot' })).netMonthlyCost;
+      const delta = after - before;
+      if (delta < -5) {
+        recs.push({
+          id: `cost-spot-${item.id}`,
+          pillar: 'cost',
+          title: `Avaliar Spot VMs — ${name}`,
+          description: 'Workloads de homologação sem estado toleram interrupções. Spot VMs têm de 60% a 91% de desconto (estimativa usa 70%), mas podem ser encerradas a qualquer momento: use MIG com recriação automática.',
+          practice: 'Otimização de custos › Escolher o modelo de consumo adequado: Spot VMs para cargas tolerantes a falhas.',
+          impact: impactFromDelta(delta),
+          monthlyDeltaUSD: delta,
+          deltaIsEstimate: true,
+          affectedItemIds: [item.id],
+          targets: [{ itemId: item.id, patch: { discountType: 'spot' } }],
+          applyLabel: 'Marcar como Spot',
         });
       }
     }
 
-    // 4. [Pilar Cost Optimization] Workloads de Teste/Dev/Staging com Spot VMs
-    if (
-      item.serviceType === 'compute' &&
-      (item.environment === 'dev' || item.environment === 'qa' || item.environment === 'staging') &&
-      item.discountType !== 'spot'
-    ) {
-      const spotSavings = computeBaseCost * 0.70; // 70% de desconto Spot
-      if (spotSavings > 10) {
-        recommendations.push({
-          id: `rec-spot-${item.id}`,
-          itemId: item.id,
-          category: 'cost_optimization',
-          pillar: 'Cost Optimization',
-          title: `Converter para Spot VM: ${item.name} (${item.environment.toUpperCase()})`,
-          description: `Ambientes de teste/desenvolvimento e tarefas em lote tolerantes a falhas podem utilizar Spot VMs para obter de 60% a 91% de desconto sem compromisso contratual.`,
-          impact: 'HIGH',
-          potentialMonthlySavingsUSD: spotSavings,
-          actionType: 'CONVERT_SPOT',
+    // ---------- CUSTO + DESEMPENHO: modernizar N1 ----------
+    if (isVM && item.machineType) {
+      const target = modernEquivalent(item.machineType);
+      if (target) {
+        const tSpec = getMachineSpec(target)!;
+        const patch = { machineType: target, vCPUs: tSpec.vCPUs, ramGB: tSpec.ramGB };
+        const delta = deltaFor(item, patch);
+        recs.push({
+          id: `perf-modernize-${item.id}`,
+          pillar: delta < 0 ? 'cost' : 'performance',
+          title: `Migrar ${item.machineType} → ${target} — ${name}`,
+          description: `N1 é a geração anterior do Compute Engine. ${target} entrega mais desempenho por vCPU${delta < 0 ? ' e custa menos mesmo após o SUD de 30% do N1' : ''}. Valide compatibilidade de SO/drivers antes da troca.`,
+          practice: 'Otimização de desempenho › Escolher o tipo de máquina adequado; Custos › Revisar periodicamente famílias de VM.',
+          impact: impactFromDelta(delta, 'LOW'),
+          monthlyDeltaUSD: delta,
+          affectedItemIds: [item.id],
+          targets: [{ itemId: item.id, patch }],
+          applyLabel: `Trocar para ${target}`,
         });
       }
     }
 
-    // 5. [Pilar Reliability] Alta Disponibilidade (HA) para Bancos de Dados em Produção
-    if (item.serviceType === 'sql' && item.environment === 'prod' && !item.highAvailability) {
-      recommendations.push({
-        id: `rec-ha-db-${item.id}`,
-        itemId: item.id,
-        category: 'resilience',
-        pillar: 'Reliability',
-        title: `Habilitar Alta Disponibilidade (Multi-Zone HA): ${item.name}`,
-        description: `Bancos de dados Cloud SQL de produção devem ter Alta Disponibilidade (HA) ativada. O failover síncrono para outra zona da mesma região protege contra incidentes de infraestrutura e garante SLA de 99,95%.`,
-        impact: 'HIGH',
-        potentialMonthlySavingsUSD: 0,
-        actionType: 'HA_CHECK',
+    // ---------- DESEMPENHO: shared-core em produção ----------
+    if (isVM && isProd && spec?.sharedCore) {
+      const patch = { machineType: 'e2-standard-2', vCPUs: 2, ramGB: 8 };
+      recs.push({
+        id: `perf-sharedcore-${item.id}`,
+        pillar: 'performance',
+        title: `VM de núcleo compartilhado em produção — ${name}`,
+        description: `${item.machineType} usa vCPU fracionada com burst limitado; sob carga contínua o desempenho cai. Para produção prefira um tipo com vCPU dedicada (ex.: e2-standard-2).`,
+        practice: 'Otimização de desempenho › Dimensionar recursos de acordo com o perfil de carga.',
+        impact: 'MEDIUM',
+        monthlyDeltaUSD: deltaFor(item, patch),
+        affectedItemIds: [item.id],
+        targets: [{ itemId: item.id, patch }],
+        applyLabel: 'Trocar para e2-standard-2',
       });
     }
 
-    // 6. [Pilar Operational Excellence] Modernizar Banco em VM para Cloud SQL Gerenciado
-    if (item.serviceType === 'compute' && (item.isDatabaseWorkload || (item.name || '').toLowerCase().includes('sql') || (item.name || '').toLowerCase().includes('mysql') || (item.name || '').toLowerCase().includes('postgres'))) {
-      recommendations.push({
-        id: `rec-db-managed-${item.id}`,
-        itemId: item.id,
-        category: 'operational_excellence',
-        pillar: 'Operational Excellence',
-        title: `Avaliar Migração para Cloud SQL Gerenciado: ${item.name}`,
-        description: `Manter banco de dados auto-hospedado em Compute Engine exige gerenciar SO, replicação, backups manuais e patches. Migrar para Cloud SQL automatiza manutenções e backups com point-in-time recovery nativo.`,
+    // ---------- DESEMPENHO: HDD em produção ----------
+    if ((isVM || item.serviceType === 'gke') && isProd && item.bootDiskType === 'pd-standard' && (item.bootDiskGB || 0) > 0) {
+      const patch = { bootDiskType: 'pd-balanced' as const };
+      recs.push({
+        id: `perf-disk-${item.id}`,
+        pillar: 'performance',
+        title: `Disco de boot HDD em produção — ${name}`,
+        description: 'pd-standard (HDD) tem IOPS e throughput baixos por GB, deixando boot, patches e logs lentos. pd-balanced é o padrão recomendado para discos de boot.',
+        practice: 'Otimização de desempenho › Escolher o armazenamento de blocos adequado ao perfil de I/O.',
+        impact: 'HIGH',
+        monthlyDeltaUSD: deltaFor(item, patch),
+        affectedItemIds: [item.id],
+        targets: [{ itemId: item.id, patch }],
+        applyLabel: 'Usar pd-balanced',
+      });
+    }
+
+    // ---------- CUSTO: pd-ssd superdimensionado ----------
+    if (isVM && !item.isDatabaseWorkload && item.bootDiskType === 'pd-ssd' && (item.bootDiskGB || 0) >= 100) {
+      const patch = { bootDiskType: 'pd-balanced' as const };
+      const delta = deltaFor(item, patch);
+      if (delta < -5) {
+        recs.push({
+          id: `cost-disk-${item.id}`,
+          pillar: 'cost',
+          title: `Disco de boot pd-ssd sem necessidade aparente — ${name}`,
+          description: `${item.bootDiskGB} GB em pd-ssd para uma VM que não é banco de dados. pd-balanced atende a maioria das aplicações com custo bem menor por GB.`,
+          practice: 'Otimização de custos › Dimensionar corretamente o armazenamento.',
+          impact: impactFromDelta(delta),
+          monthlyDeltaUSD: delta,
+          affectedItemIds: [item.id],
+          targets: [{ itemId: item.id, patch }],
+          applyLabel: 'Usar pd-balanced',
+        });
+      }
+    }
+
+    // ---------- CUSTO: classes de storage ----------
+    if (item.serviceType === 'storage' && (item.storageGB || 0) >= 500 && (!item.storageClass || item.storageClass === 'standard')) {
+      const nearlineDelta = deltaFor(item, { storageClass: 'nearline' });
+      const delta = nearlineDelta * 0.5; // premissa: metade dos dados é fria
+      recs.push({
+        id: `cost-storage-${item.id}`,
+        pillar: 'cost',
+        title: `Ativar Autoclass ou regras de ciclo de vida — ${name}`,
+        description: `${item.storageGB} GB em Standard. Autoclass move objetos pouco acessados para classes mais baratas automaticamente. Estimativa supõe que 50% dos dados ficam frios; Nearline/Coldline têm duração mínima e taxa de leitura.`,
+        practice: 'Otimização de custos › Usar classes de armazenamento e políticas de ciclo de vida conforme o padrão de acesso.',
+        impact: impactFromDelta(delta),
+        monthlyDeltaUSD: delta,
+        deltaIsEstimate: true,
+        affectedItemIds: [item.id],
+      });
+    }
+
+    // ---------- CONFIABILIDADE: Cloud SQL sem HA em produção ----------
+    if (item.serviceType === 'sql' && isProd && !item.highAvailability) {
+      const patch = { highAvailability: true };
+      recs.push({
+        id: `rel-sqlha-${item.id}`,
+        pillar: 'reliability',
+        title: `Cloud SQL de produção sem alta disponibilidade — ${name}`,
+        description: 'Instância zonal: uma falha de zona derruba o banco. A configuração HA regional mantém uma standby síncrona em outra zona com failover automático e eleva o SLA para 99,95%. O custo de instância e storage dobra.',
+        practice: 'Confiabilidade › Projetar para falhas: eliminar pontos únicos de falha com redundância zonal.',
+        impact: 'HIGH',
+        monthlyDeltaUSD: deltaFor(item, patch),
+        affectedItemIds: [item.id],
+        targets: [{ itemId: item.id, patch }],
+        applyLabel: 'Habilitar HA',
+      });
+    }
+
+    // ---------- CONFIABILIDADE: VM única em produção ----------
+    if (isVM && isProd && !item.isDatabaseWorkload && (item.quantity || 1) === 1 && !spec?.sharedCore) {
+      const patch = { quantity: 2 };
+      recs.push({
+        id: `rel-single-${item.id}`,
+        pillar: 'reliability',
+        title: `Ponto único de falha — ${name}`,
+        description: 'Uma única VM em produção. Use um grupo gerenciado de instâncias (MIG) regional com pelo menos 2 instâncias em zonas diferentes, health check e autohealing atrás de um balanceador. Se a aplicação não escala horizontalmente, avalie ao menos snapshots e um plano de recuperação.',
+        practice: 'Confiabilidade › Usar redundância entre zonas e recuperação automática (MIG + autohealing).',
         impact: 'MEDIUM',
-        potentialMonthlySavingsUSD: 0,
-        actionType: 'MIGRATE_DB_TO_MANAGED',
+        monthlyDeltaUSD: deltaFor(item, patch),
+        affectedItemIds: [item.id],
+        targets: [{ itemId: item.id, patch }],
+        applyLabel: 'Usar 2 instâncias',
+      });
+    }
+
+    // ---------- OPERACIONAL: banco em VM → Cloud SQL ----------
+    if (isVM && item.isDatabaseWorkload) {
+      const vcpus = spec?.vCPUs || item.vCPUs || 2;
+      const ram = spec?.ramGB || item.ramGB || 8;
+      const tier = sqlTierFor(vcpus, ram);
+      const patch: Partial<InventoryItem> = {
+        serviceType: 'sql',
+        category: 'DATABASE',
+        dbEngine: item.dbEngine || 'MYSQL',
+        dbTier: tier,
+        dbStorageGB: (item.bootDiskGB || 0) + (item.additionalDiskGB || 0) || 100,
+        highAvailability: isProd,
+        gcpProductSuggested: undefined,
+      };
+      recs.push({
+        id: `ops-managed-db-${item.id}`,
+        pillar: 'operational_excellence',
+        title: `Migrar banco auto-gerenciado para Cloud SQL — ${name}`,
+        description: `Banco em VM exige cuidar de SO, patches, replicação e backups manualmente. Cloud SQL (${tier}${isProd ? ', HA regional' : ''}) entrega backups automáticos, PITR, manutenção agendada e failover gerenciado. A variação inclui o custo gerenciado${isProd ? ' e a standby de HA' : ''}.`,
+        practice: 'Excelência operacional › Automatizar e usar serviços gerenciados para reduzir trabalho operacional.',
+        impact: isProd ? 'HIGH' : 'MEDIUM',
+        monthlyDeltaUSD: deltaFor(item, patch),
+        affectedItemIds: [item.id],
+        targets: [{ itemId: item.id, patch }],
+        applyLabel: 'Converter para Cloud SQL',
+      });
+    }
+
+    // ---------- CONFIABILIDADE: VPN com túnel único ----------
+    if (item.serviceType === 'network' && item.networkType === 'vpn' && (item.quantity || 1) < 2) {
+      const patch = { quantity: 2 };
+      recs.push({
+        id: `rel-vpn-${item.id}`,
+        pillar: 'reliability',
+        title: `VPN com um único túnel — ${name}`,
+        description: 'O SLA de 99,99% do HA VPN exige dois túneis (duas interfaces) para o gateway de borda. Com um túnel só, uma manutenção derruba a conectividade híbrida.',
+        practice: 'Confiabilidade › Construir conectividade híbrida redundante.',
+        impact: 'MEDIUM',
+        monthlyDeltaUSD: deltaFor(item, patch),
+        affectedItemIds: [item.id],
+        targets: [{ itemId: item.id, patch }],
+        applyLabel: 'Usar 2 túneis',
       });
     }
   });
 
-  return recommendations;
+  // ======================= Visão do inventário =======================
+
+  // ---------- CUSTO: CUD só para baseline produtivo ----------
+  const steadyProd = calculated.filter(
+    (c) => c.isCudEligible && c.item.environment === 'prod' && (c.item.usageHoursPerMonth ?? 730) >= 700 && c.item.discountType !== 'spot',
+  );
+  if (steadyProd.length > 0) {
+    const savings1 = steadyProd.reduce((acc, c) => {
+      const raw = calculateItemCost(stripImported(c.item));
+      return acc + (raw.paygCostMonthly - raw.cud1yrCostMonthly);
+    }, 0);
+    const nonProd = calculated.filter((c) => c.isCudEligible && c.item.environment !== 'prod').length;
+    if (savings1 > 1) {
+      recs.push({
+        id: 'cost-cud-baseline',
+        pillar: 'cost',
+        title: `Comprometer apenas o baseline de produção (${steadyProd.length} recurso${steadyProd.length > 1 ? 's' : ''})`,
+        description: `Recursos de produção 24×7 são candidatos a CUD: 1 ano dá ~${CUD_RATES.compute.cud_1yr * 100}% em Compute e ~${CUD_RATES.sql.cud_1yr * 100}% em Cloud SQL. Comece por 1 ano e só vá para 3 anos com a arquitetura estável.${nonProd > 0 ? ` Não comprometa os ${nonProd} recurso(s) não produtivos: eles devem ser desligados ou dimensionados sob demanda.` : ''}`,
+        practice: 'Otimização de custos › Usar descontos por compromisso para cargas previsíveis e estáveis.',
+        impact: impactFromDelta(-savings1),
+        monthlyDeltaUSD: -savings1,
+        affectedItemIds: steadyProd.map((c) => c.item.id),
+      });
+    }
+  }
+
+  // ---------- CONFIABILIDADE: snapshots de discos de produção ----------
+  const prodDisks = items.filter(
+    (i) => i.environment === 'prod' && (i.serviceType === 'compute' || i.serviceType === 'disk') && ((i.bootDiskGB || 0) + (i.additionalDiskGB || 0)) > 0,
+  );
+  if (prodDisks.length > 0) {
+    const totalGB = prodDisks.reduce((a, i) => a + ((i.bootDiskGB || 0) + (i.additionalDiskGB || 0)) * Math.max(1, i.quantity || 1), 0);
+    recs.push({
+      id: 'rel-snapshots',
+      pillar: 'reliability',
+      title: `Agendar snapshots dos discos de produção (${totalGB.toLocaleString('pt-BR')} GB)`,
+      description: `Configure snapshot schedules com retenção definida e, se exigido, armazenamento multirregional. Estimativa considera snapshots incrementais equivalentes a 1× o volume provisionado a US$ ${SNAPSHOT_GB_MONTHLY_USD}/GB·mês.`,
+      practice: 'Confiabilidade › Definir RPO/RTO e implementar backup e recuperação testados.',
+      impact: 'MEDIUM',
+      monthlyDeltaUSD: totalGB * SNAPSHOT_GB_MONTHLY_USD,
+      deltaIsEstimate: true,
+      affectedItemIds: prodDisks.map((i) => i.id),
+    });
+  }
+
+  // ---------- SEGURANÇA: IPs públicos ----------
+  const publicIps = items.filter((i) => i.serviceType === 'network' && i.networkType === 'ip');
+  if (publicIps.length > 0) {
+    const ipCount = publicIps.reduce((a, i) => a + (i.ipCount || 1) * Math.max(1, i.quantity || 1), 0);
+    recs.push({
+      id: 'sec-public-ips',
+      pillar: 'security',
+      title: `Reduzir exposição por IP público (${ipCount} IP${ipCount > 1 ? 's' : ''})`,
+      description: 'Cada IP externo em VM é superfície de ataque. Prefira VMs só com IP interno, Cloud NAT para saída, Identity-Aware Proxy (IAP) para SSH/RDP e um balanceador com Cloud Armor para tráfego de entrada.',
+      practice: 'Segurança › Proteger o perímetro de rede e aplicar acesso com menor privilégio.',
+      impact: 'HIGH',
+      monthlyDeltaUSD: 0,
+      affectedItemIds: publicIps.map((i) => i.id),
+    });
+  }
+
+  // ---------- SEGURANÇA: bancos gerenciados ----------
+  const sqlItems = items.filter((i) => i.serviceType === 'sql');
+  if (sqlItems.length > 0) {
+    recs.push({
+      id: 'sec-cloudsql',
+      pillar: 'security',
+      title: `Endurecer ${sqlItems.length} instância${sqlItems.length > 1 ? 's' : ''} Cloud SQL`,
+      description: 'Use IP privado (Private Service Access/PSC) em vez de IP público, exija SSL/TLS, autenticação IAM de banco, e chaves CMEK quando houver requisito regulatório. Ative backups automáticos e PITR.',
+      practice: 'Segurança › Proteger dados com criptografia e controle de acesso; minimizar exposição pública.',
+      impact: 'MEDIUM',
+      monthlyDeltaUSD: 0,
+      affectedItemIds: sqlItems.map((i) => i.id),
+    });
+  }
+
+  // ---------- OPERACIONAL: governança de custos ----------
+  if (items.length > 0) {
+    recs.push({
+      id: 'ops-governance',
+      pillar: 'operational_excellence',
+      title: 'Labels, orçamento e export de billing desde o primeiro dia',
+      description: 'Padronize labels (ambiente, aplicação, centro de custo, dono), crie budgets com alertas por projeto e exporte o billing para BigQuery. Isso é o que torna as estimativas desta calculadora auditáveis depois da migração.',
+      practice: 'Excelência operacional e Custos › Visibilidade e atribuição de custos (FinOps).',
+      impact: 'MEDIUM',
+      monthlyDeltaUSD: 0,
+      affectedItemIds: [],
+    });
+  }
+
+  // ---------- SUSTENTABILIDADE: regiões de baixo carbono ----------
+  const byRegion = new Map<string, InventoryItem[]>();
+  items.forEach((i) => {
+    const reg = getRegion(i.region);
+    if (!reg.lowCO2 && reg.lowCO2Alternative) {
+      byRegion.set(reg.id, [...(byRegion.get(reg.id) || []), i]);
+    }
+  });
+  byRegion.forEach((regionItems, regionId) => {
+    const alt = getRegion(regionId).lowCO2Alternative!;
+    const delta = regionItems.reduce((acc, i) => acc + deltaFor(i, { region: alt }), 0);
+    recs.push({
+      id: `sus-region-${regionId}`,
+      pillar: 'sustainability',
+      title: `Considerar ${regionLabel(alt)} no lugar de ${regionId}`,
+      description: `${regionItems.length} recurso(s) em uma região sem selo "Low CO₂". ${regionLabel(alt)} é próxima e tem matriz energética mais limpa. Avalie latência e requisitos de residência de dados antes de mover.`,
+      practice: 'Sustentabilidade › Escolher regiões com menor intensidade de carbono.',
+      impact: 'LOW',
+      monthlyDeltaUSD: delta,
+      affectedItemIds: regionItems.map((i) => i.id),
+      targets: regionItems.map((i) => ({ itemId: i.id, patch: { region: alt } })),
+      applyLabel: `Mover para ${alt}`,
+    });
+  });
+
+  return recs;
+}
+
+/**
+ * Economia potencial total sem dupla contagem:
+ * para cada recurso considera apenas a maior economia entre as recomendações que o afetam.
+ */
+export function totalPotentialSavings(recs: WellArchitectedRecommendation[]): number {
+  const perItem = new Map<string, number>();
+  let aggregate = 0;
+  recs
+    .filter((r) => r.monthlyDeltaUSD < 0 && r.pillar === 'cost')
+    .forEach((r) => {
+      const saving = -r.monthlyDeltaUSD;
+      if (r.affectedItemIds.length === 1) {
+        const id = r.affectedItemIds[0];
+        perItem.set(id, Math.max(perItem.get(id) || 0, saving));
+      } else {
+        aggregate = Math.max(aggregate, saving);
+      }
+    });
+  return Array.from(perItem.values()).reduce((a, b) => a + b, 0) + aggregate;
 }
